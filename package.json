@@ -1,8 +1,12 @@
 {
   "devDependencies": {
-    "@types/validator": "^13.12.2"
+    "@types/validator": "^13.12.2",
+    "husky": "^8.0.0"
   },
   "dependencies": {
     "@fingerprintjs/fingerprintjs": "^4.5.1"
+  },
+  "scripts": {
+    "prepare": "husky install"
   }
 }

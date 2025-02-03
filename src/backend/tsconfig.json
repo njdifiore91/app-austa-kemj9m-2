@@ -4,7 +4,7 @@
     "module": "CommonJS",
     "lib": ["ES2022"],
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -40,16 +40,8 @@
       "@virtual-care/*": ["virtual-care-service/src/*"],
       "@api-gateway/*": ["api-gateway/src/*"]
     },
-    "typeRoots": [
-      "./node_modules/@types",
-      "./shared/types"
-    ],
-    "types": [
-      "node",
-      "jest",
-      "express",
-      "ws"
-    ]
+    "typeRoots": ["./node_modules/@types", "./shared/types"],
+    "types": ["node", "jest", "express"]
   },
   "include": [
     "api-gateway/src/**/*",

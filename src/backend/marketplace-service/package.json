@@ -20,8 +20,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "docker:build": "docker build -t austa-marketplace-service --no-cache .",
     "docker:run": "docker run -p 3000:3000 --env-file .env austa-marketplace-service",
-    "security:audit": "npm audit --audit-level=high",
-    "prepare": "husky install"
+    "security:audit": "npm audit --audit-level=high"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^8.0.0",

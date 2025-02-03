@@ -1,0 +1,26 @@
+{
+  "name": "@austa/shared",
+  "version": "1.0.0",
+  "description": "Shared utilities and components for AUSTA SuperApp Backend Services",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "winston": "^3.10.0",
+    "jsonwebtoken": "9.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^4.1.6",
+    "jest": "29.6.0",
+    "@types/jest": "29.5.0",
+    "eslint": "8.48.0",
+    "prettier": "3.0.3"
+  }
+} 
