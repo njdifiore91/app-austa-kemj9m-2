@@ -4,12 +4,42 @@
  * with HIPAA compliance considerations
  */
 
-import { BASE_URL, API_VERSION } from './src/lib/constants/endpoints';
-import withBundleAnalyzer from '@next/bundle-analyzer';
-import withPWA from 'next-pwa';
-import withSentryConfig from '@sentry/nextjs';
-import type { NextConfig, WebpackConfigContext } from 'next';
-import type { Configuration } from 'webpack';
+const { BASE_URL, API_VERSION } = require('./src/lib/constants/endpoints.js');
+const withBundleAnalyzer = require('@next/bundle-analyzer');
+const withPWA = require('next-pwa')({
+  dest: 'public',
+  register: true,
+  skipWaiting: true,
+  disable: process.env.NODE_ENV === 'development',
+  runtimeCaching: [
+    {
+      urlPattern: new RegExp(`^${BASE_URL}/${API_VERSION}/.*`),
+      handler: 'NetworkFirst',
+      options: {
+        cacheName: 'api-cache',
+        expiration: {
+          maxEntries: 200,
+          maxAgeSeconds: 3600,
+        },
+        cacheableResponse: {
+          statuses: [0, 200],
+        },
+      },
+    },
+    {
+      urlPattern: /^https:\/\/cdn\.austa\.health\/.*/,
+      handler: 'CacheFirst',
+      options: {
+        cacheName: 'static-cache',
+        expiration: {
+          maxEntries: 100,
+          maxAgeSeconds: 86400,
+        },
+      },
+    },
+  ],
+});
+const { withSentryConfig } = require('@sentry/nextjs');
 
 /**
  * Content Security Policy configuration
@@ -28,18 +58,15 @@ const ContentSecurityPolicy = `
   manifest-src 'self';
 `.replace(/\s{2,}/g, ' ').trim();
 
-/**
- * Base Next.js configuration with security and optimization settings
- */
-const baseConfig: NextConfig = {
+// Create the base configuration
+const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? '',
     NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN ?? '',
   },
-
-  async headers() {
+  headers: async () => {
     return [
       {
         source: '/:path*',
@@ -80,15 +107,13 @@ const baseConfig: NextConfig = {
       },
     ];
   },
-
   images: {
     domains: ['cdn.austa.health', 'storage.austa.health'],
     deviceSizes: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
     imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
     formats: ['image/avif', 'image/webp'],
   },
-
-  webpack: (config: Configuration, { dev, isServer }: WebpackConfigContext): Configuration => {
+  webpack: (config, { dev, isServer }) => {
     // Optimize bundle splitting
     config.optimization = {
       ...config.optimization,
@@ -106,82 +131,30 @@ const baseConfig: NextConfig = {
         },
       },
     };
-
     return config;
   },
 };
 
-/**
- * Progressive Web App configuration
- */
-const pwaConfig = {
-  dest: 'public',
-  register: true,
-  skipWaiting: true,
-  disable: process.env.NODE_ENV === 'development',
-  runtimeCaching: [
-    {
-      urlPattern: new RegExp(`^${BASE_URL}/${API_VERSION}/.*`),
-      handler: 'NetworkFirst',
-      options: {
-        cacheName: 'api-cache',
-        expiration: {
-          maxEntries: 200,
-          maxAgeSeconds: 3600,
-        },
-        cacheableResponse: {
-          statuses: [0, 200],
-        },
-      },
-    },
-    {
-      urlPattern: /^https:\/\/cdn\.austa\.health\/.*/,
-      handler: 'CacheFirst',
-      options: {
-        cacheName: 'static-cache',
-        expiration: {
-          maxEntries: 100,
-          maxAgeSeconds: 86400,
-        },
-      },
-    },
-  ],
+// Export the final configuration with all wrappers
+const finalConfig = () => {
+  let config = withPWA(nextConfig);
+
+  if (process.env.ANALYZE === 'true') {
+    config = withBundleAnalyzer({
+      enabled: true,
+      openAnalyzer: true,
+    })(config);
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    config = withSentryConfig(config, {
+      silent: process.env.NODE_ENV === 'development',
+      hideSourceMaps: true,
+      widenClientFileUpload: true,
+    });
+  }
+
+  return config;
 };
 
-/**
- * Sentry configuration for error tracking
- */
-const sentryConfig = {
-  silent: process.env.NODE_ENV === 'development',
-  hideSourceMaps: true,
-  widenClientFileUpload: true,
-};
-
-/**
- * Bundle analyzer configuration
- */
-const analyzerConfig = {
-  enabled: process.env.ANALYZE === 'true',
-  openAnalyzer: true,
-};
-
-// Apply configuration wrappers
-let config: NextConfig = baseConfig;
-
-// Enable PWA capabilities
-config = withPWA({
-  ...config,
-  pwa: pwaConfig,
-});
-
-// Add bundle analyzer in analysis mode
-if (process.env.ANALYZE === 'true') {
-  config = withBundleAnalyzer(analyzerConfig)(config);
-}
-
-// Add Sentry configuration for production
-if (process.env.NODE_ENV === 'production') {
-  config = withSentryConfig(config, sentryConfig);
-}
-
-export default config;
+module.exports = finalConfig();

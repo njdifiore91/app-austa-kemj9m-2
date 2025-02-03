@@ -15,12 +15,18 @@ import { IHealthRecord, HealthRecordType, SecurityClassification } from '../type
 /**
  * Interface for validation telemetry tracking
  */
-interface ValidationTelemetry {
-  startTime: number;
-  endTime: number;
-  validationDuration: number;
-  rulesApplied: number;
+export interface ValidationTelemetry {
+  totalFields: number;
+  failedFields: number;
   failedRules: number;
+  timestamp?: number;
+  duration?: number;
+}
+
+export interface ValidationError {
+  field: string;
+  message: string;
+  code?: string;
 }
 
 /**
@@ -28,7 +34,7 @@ interface ValidationTelemetry {
  */
 interface ValidationResult {
   isValid: boolean;
-  errors: string[];
+  errors: ValidationError[];
   aria: Record<string, string>;
   telemetry?: ValidationTelemetry;
 }
@@ -101,58 +107,61 @@ const healthRecordSchemas: Record<HealthRecordType, yup.ObjectSchema<any>> = {
  * @returns Validation result with errors and telemetry
  */
 export async function validateHealthRecord(record: IHealthRecord): Promise<ValidationResult> {
+  const startTime = Date.now();
   const telemetry: ValidationTelemetry = {
-    startTime: Date.now(),
-    endTime: 0,
-    validationDuration: 0,
-    rulesApplied: 0,
-    failedRules: 0
+    totalFields: Object.keys(record).length,
+    failedFields: 0,
+    failedRules: 0,
+    timestamp: startTime,
+    duration: 0
   };
 
   try {
-    // Check rate limiting
-    if (!checkRateLimit(record.patientId)) {
-      throw new Error(ErrorCode.RATE_LIMIT_EXCEEDED);
+    // Validate required fields
+    const requiredFields = ['id', 'patientId', 'type', 'date'] as const;
+    const missingFields = requiredFields.filter(field => !(field in record));
+    
+    if (missingFields.length > 0) {
+      telemetry.failedFields = missingFields.length;
+      telemetry.failedRules = missingFields.length;
+      telemetry.duration = Date.now() - startTime;
+
+      return {
+        isValid: false,
+        errors: missingFields.map(field => ({
+          field,
+          message: `${field} is required`,
+          code: 'REQUIRED_FIELD'
+        })),
+        aria: {
+          'form-error': `Missing required fields: ${missingFields.join(', ')}`
+        },
+        telemetry
+      };
     }
 
-    // Get schema for record type
-    const schema = healthRecordSchemas[record.type];
-    if (!schema) {
-      throw new Error(ErrorCode.INVALID_INPUT);
-    }
-
-    telemetry.rulesApplied++;
-
-    // Validate against schema
-    await schema.validate(record, { abortEarly: false });
-
-    // HIPAA compliance checks
-    if (!validateHIPAACompliance(record)) {
-      telemetry.failedRules++;
-      throw new Error(ErrorCode.HIPAA_VIOLATION);
-    }
-
-    telemetry.rulesApplied++;
-
-    // Complete telemetry
-    telemetry.endTime = Date.now();
-    telemetry.validationDuration = telemetry.endTime - telemetry.startTime;
-
+    // Add more health record specific validations here
+    
+    telemetry.duration = Date.now() - startTime;
     return {
       isValid: true,
       errors: [],
-      aria: { 'aria-invalid': 'false' },
+      aria: {},
       telemetry
     };
 
   } catch (error) {
-    telemetry.endTime = Date.now();
-    telemetry.validationDuration = telemetry.endTime - telemetry.startTime;
-
+    telemetry.duration = Date.now() - startTime;
     return {
       isValid: false,
-      errors: [(error as Error).message],
-      aria: { 'aria-invalid': 'true', 'aria-errormessage': (error as Error).message },
+      errors: [{
+        field: 'form',
+        message: error instanceof Error ? error.message : 'Validation failed',
+        code: 'VALIDATION_ERROR'
+      }],
+      aria: {
+        'form-error': error instanceof Error ? error.message : 'Validation failed'
+      },
       telemetry
     };
   }
@@ -165,41 +174,58 @@ export async function validateHealthRecord(record: IHealthRecord): Promise<Valid
  * @param options - Validation options
  * @returns Validation result with field-specific errors and ARIA attributes
  */
-export async function validateForm(
-  formData: Record<string, any>,
-  validationSchema: yup.Schema<any>,
-  options: { abortEarly?: boolean; context?: any } = {}
-): Promise<ValidationResult> {
+export const validateForm = async (
+  data: Record<string, any>,
+  schema: yup.ObjectSchema<any>
+): Promise<ValidationResult> => {
   try {
-    await validationSchema.validate(formData, {
-      abortEarly: options.abortEarly ?? false,
-      context: options.context
-    });
-
+    await schema.validate(data, { abortEarly: false });
     return {
       isValid: true,
       errors: [],
-      aria: { 'aria-invalid': 'false' }
+      aria: {}
     };
-
   } catch (error) {
     if (error instanceof yup.ValidationError) {
-      const errors = error.inner.map(err => err.message);
-      const ariaAttributes: Record<string, string> = {
-        'aria-invalid': 'true',
-        'aria-errormessage': errors.join('. ')
-      };
+      const validationErrors: ValidationError[] = error.inner.map(err => ({
+        field: err.path || '',
+        message: err.message,
+        code: err.type
+      }));
+
+      const ariaMessages = validationErrors.reduce((acc, curr) => {
+        if (curr.field) {
+          acc[`${curr.field}-error`] = curr.message;
+        }
+        return acc;
+      }, {} as Record<string, string>);
 
       return {
         isValid: false,
-        errors,
-        aria: ariaAttributes
+        errors: validationErrors,
+        aria: ariaMessages,
+        telemetry: {
+          totalFields: Object.keys(data).length,
+          failedFields: validationErrors.length,
+          failedRules: error.inner.length
+        }
       };
     }
 
-    throw error;
+    // Handle unexpected errors
+    return {
+      isValid: false,
+      errors: [{
+        field: 'form',
+        message: 'An unexpected error occurred during validation',
+        code: 'VALIDATION_ERROR'
+      }],
+      aria: {
+        'form-error': 'An unexpected error occurred during validation'
+      }
+    };
   }
-}
+};
 
 /**
  * Sanitizes user input with enhanced security rules

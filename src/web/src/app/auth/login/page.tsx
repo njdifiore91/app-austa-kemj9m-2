@@ -62,6 +62,27 @@ const SecurityNotice = styled.div`
   text-align: center;
 `;
 
+const RegistrationLink = styled.div`
+  margin-top: 1.5rem;
+  text-align: center;
+  font-size: 0.875rem;
+
+  a {
+    color: var(--primary-color, #0066cc);
+    text-decoration: none;
+    font-weight: 500;
+    
+    &:hover {
+      text-decoration: underline;
+    }
+
+    &:focus {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+    }
+  }
+`;
+
 /**
  * HIPAA-compliant login page with enhanced security features
  */
@@ -73,7 +94,7 @@ const LoginPage: React.FC = () => {
     isLoading,
     error,
     login: handleLogin,
-    verifyBiometric
+    verifyMFA
   } = useAuth();
 
   // State management
@@ -180,6 +201,14 @@ const LoginPage: React.FC = () => {
           emergencyAccess={securityContext.emergencyAccess}
         />
 
+        {/* Registration Link */}
+        <RegistrationLink>
+          Don't have an account?{' '}
+          <a href="/auth/register" onClick={() => router.push('/auth/register')}>
+            Register here
+          </a>
+        </RegistrationLink>
+
         {/* Security notice */}
         <SecurityNotice role="note" aria-live="polite">
           This system is protected by enhanced security measures and complies with HIPAA regulations.
@@ -188,12 +217,6 @@ const LoginPage: React.FC = () => {
       </LoginContainer>
     </StyledLoginPage>
   );
-};
-
-// Metadata for Next.js page
-export const metadata = {
-  title: 'Login - AUSTA SuperApp',
-  description: 'Secure healthcare platform login with multi-factor authentication'
 };
 
 export default LoginPage;

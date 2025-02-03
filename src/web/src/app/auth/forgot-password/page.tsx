@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import winston from 'winston';
+import { logger } from '../../../lib/utils/logger';
 import { Button } from '@/components/common/Button';
 import Input from '@/components/common/Input';
 import { AuthAPI } from '@/lib/api/auth';
@@ -11,14 +11,11 @@ import { ErrorTracker } from '@/lib/constants/errorCodes';
 import { Analytics } from '@/lib/utils/analytics';
 
 // Initialize secure logger for password reset events
-const securityLogger = winston.createLogger({
-  level: 'info',
-  format: winston.format.json(),
-  defaultMeta: { service: 'forgot-password' },
-  transports: [
-    new winston.transports.File({ filename: 'security-events.log' })
-  ]
-});
+const securityLogger = {
+  info: (message: string, metadata: Record<string, any>) => {
+    logger.info(message, metadata);
+  }
+};
 
 // Form data interface with security metadata
 interface ForgotPasswordFormData {

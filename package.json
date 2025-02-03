@@ -1,0 +1,8 @@
+{
+  "devDependencies": {
+    "@types/validator": "^13.12.2"
+  },
+  "dependencies": {
+    "@fingerprintjs/fingerprintjs": "^4.5.1"
+  }
+}

@@ -5,6 +5,7 @@
 
 // Global constants for API configuration
 export const API_VERSION = 'v1';
+console.log('NEXT_PUBLIC_API_URL', process.env.NEXT_PUBLIC_API_URL);
 export const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.austa.health';
 
 /**

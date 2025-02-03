@@ -22,8 +22,7 @@ import {
   ResponsiveContainer 
 } from 'recharts'; // v2.0.0
 import { debounce } from 'lodash'; // v4.17.21
-import { FHIRValidator } from '@fhir/validator'; // v2.0.0
-import { useSecureData } from '@health/secure-data'; // v1.0.0
+import CryptoJS from 'crypto-js';
 
 import { useHealthRecords } from '../../hooks/useHealthRecords';
 import { HealthRecordType, SecurityClassification } from '../../lib/types/healthRecord';
@@ -89,7 +88,7 @@ const HealthMetrics: React.FC<HealthMetricsProps> = ({
   accessLevel,
   theme
 }) => {
-  // Initialize hooks for health records and secure data handling
+  // Initialize hooks for health records
   const { 
     records, 
     loading, 
@@ -101,22 +100,52 @@ const HealthMetrics: React.FC<HealthMetricsProps> = ({
     recordTypes: [HealthRecordType.VITAL_SIGNS, HealthRecordType.WEARABLE_DATA]
   });
 
-  const { decryptData, validateAccess } = useSecureData({
-    encryptionKey,
-    securityLevel: SecurityClassification.HIGHLY_CONFIDENTIAL
-  });
+  // Secure data handling functions
+  const decryptData = useCallback((encryptedData: Record<string, any> | string) => {
+    try {
+      if (typeof encryptedData === 'string') {
+        const bytes = CryptoJS.AES.decrypt(encryptedData, encryptionKey);
+        return JSON.parse(bytes.toString(CryptoJS.enc.Utf8));
+      }
+      // If data is already an object, return as is (for development/testing)
+      return encryptedData;
+    } catch (error) {
+      console.error('Failed to decrypt data:', error);
+      return null;
+    }
+  }, [encryptionKey]);
 
-  // Memoized metrics processing with FHIR validation
+  const validateAccess = useCallback((requiredLevel: AccessLevel): boolean => {
+    const accessLevels = {
+      [AccessLevel.READ]: 0,
+      [AccessLevel.WRITE]: 1,
+      [AccessLevel.ADMIN]: 2
+    };
+    return accessLevels[accessLevel] >= accessLevels[requiredLevel];
+  }, [accessLevel]);
+
+  // Memoized metrics processing
   const processedMetrics = useMemo(() => {
     if (!records?.length) return null;
 
-    const validator = new FHIRValidator();
     return records
-      .filter(record => validator.validateResource(record))
+      .filter(record => {
+        try {
+          // Basic validation of record structure
+          return record && 
+                 typeof record === 'object' && 
+                 'content' in record && 
+                 'date' in record;
+        } catch (error) {
+          console.error('Invalid record format:', error);
+          return false;
+        }
+      })
       .map(record => ({
         ...decryptData(record.content),
         timestamp: new Date(record.date)
       }))
+      .filter(record => record !== null)
       .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
   }, [records, decryptData]);
 

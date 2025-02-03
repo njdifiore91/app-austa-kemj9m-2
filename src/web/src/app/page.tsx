@@ -2,34 +2,23 @@
 
 import React, { useEffect, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
-import { Grid, Container, Typography, ThemeProvider } from '@mui/material';
+import { Grid, Container, Typography } from '@mui/material';
 import Analytics from '@vercel/analytics';
-
-// Internal imports
-import Header from '../components/layout/Header';
+import { useAuthContext } from '../contexts/AuthContext';
 import HealthMetrics from '../components/dashboard/HealthMetrics';
+import { AccessLevel, ThemePreference } from '../components/dashboard/types';
 import QuickActions from '../components/dashboard/QuickActions';
-import ErrorBoundary from '../components/common/ErrorBoundary';
-import useAuth from '../hooks/useAuth';
-import theme from '../styles/theme';
 import { UserRole } from '../lib/types/user';
-import { SecurityClassification } from '../lib/types/healthRecord';
 
 // Constants
 const REFRESH_INTERVAL = 30000; // 30 seconds
-const MOBILE_BREAKPOINT = 768;
-const ANALYTICS_KEY = process.env.NEXT_PUBLIC_ANALYTICS_KEY;
-const ERROR_BOUNDARY_CONFIG = { maxRetries: 3, fallbackUI: true };
 
-/**
- * Enhanced security check for authentication and role validation
- */
-const checkAuth = () => {
-  const { user, isAuthenticated, userRole } = useAuth();
+export default function HomePage() {
+  const auth = useAuthContext();
   const router = useRouter();
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!auth.state || auth.state === 'UNAUTHENTICATED') {
       router.push('/auth/login');
       return;
     }
@@ -37,116 +26,85 @@ const checkAuth = () => {
     // Track secure page view
     Analytics.track('page_view', {
       page: 'dashboard',
-      userRole,
+      userRole: auth.user?.role || 'UNAUTHENTICATED',
       timestamp: Date.now(),
-      isAuthenticated: true
+      isAuthenticated: auth.state === 'AUTHENTICATED'
     });
-  }, [isAuthenticated, userRole, router]);
-
-  return { user, userRole };
-};
-
-/**
- * Main landing page component with role-based content and security features
- */
-const HomePage = () => {
-  const { user, userRole } = checkAuth();
-  const router = useRouter();
+  }, [auth.state, auth.user?.role, router]);
 
   // Security context for components
   const securityContext = {
-    sessionId: user?.id || '',
-    authToken: user?.securitySettings?.lastLoginAt.toString() || '',
+    sessionId: auth.user?.id || '',
+    authToken: auth.user?.securitySettings?.lastLoginAt.toString() || '',
     ipAddress: 'masked',
-    deviceId: user?.securitySettings?.deviceTrust?.[0]?.deviceId || ''
+    deviceId: auth.user?.securitySettings?.deviceTrust?.[0]?.deviceId || ''
   };
 
-  // Handle component errors with audit logging
-  const handleError = (error: Error, errorInfo: React.ErrorInfo) => {
-    Analytics.track('error_boundary_triggered', {
-      error: error.message,
-      component: 'HomePage',
-      userRole,
-      timestamp: Date.now()
-    });
-  };
+  if (!auth.user?.role) {
+    return null;
+  }
 
   return (
-    <ThemeProvider theme={theme}>
-      <ErrorBoundary
-        onError={handleError}
-        retryAttempts={ERROR_BOUNDARY_CONFIG.maxRetries}
+    <Container maxWidth="xl" role="main">
+      <Grid 
+        container 
+        spacing={3} 
+        sx={{ mt: 3 }}
+        role="region"
+        aria-label="Dashboard content"
       >
-        <Container maxWidth="xl" role="main">
-          <Header 
-            transparent={false}
-            clinicalEnvironment="STANDARD"
-          />
-
-          <Grid 
-            container 
-            spacing={3} 
-            sx={{ mt: 3 }}
-            role="region"
-            aria-label="Dashboard content"
+        {/* Welcome Section */}
+        <Grid item xs={12}>
+          <Typography 
+            variant="h1" 
+            component="h1"
+            gutterBottom
+            aria-label="Welcome message"
           >
-            {/* Welcome Section */}
-            <Grid item xs={12}>
-              <Typography 
-                variant="h1" 
-                component="h1"
-                gutterBottom
-                aria-label="Welcome message"
-              >
-                Welcome, {user?.profile.firstName}
-              </Typography>
-            </Grid>
+            Welcome, {auth.user.profile.firstName}
+          </Typography>
+        </Grid>
 
-            {/* Quick Actions Section */}
-            <Grid item xs={12}>
-              <Suspense fallback={<div>Loading actions...</div>}>
-                <QuickActions
-                  userRole={userRole as UserRole}
-                  securityContext={securityContext}
-                />
-              </Suspense>
-            </Grid>
+        {/* Quick Actions Section */}
+        <Grid item xs={12}>
+          <Suspense fallback={<div>Loading actions...</div>}>
+            <QuickActions
+              userRole={auth.user.role}
+              securityContext={securityContext}
+            />
+          </Suspense>
+        </Grid>
 
-            {/* Health Metrics Section - Only for patients and providers */}
-            {(userRole === UserRole.PATIENT || userRole === UserRole.PROVIDER) && (
-              <Grid item xs={12}>
-                <Suspense fallback={<div>Loading health metrics...</div>}>
-                  <HealthMetrics
-                    patientId={user?.id || ''}
-                    refreshInterval={REFRESH_INTERVAL}
-                    showHistory={true}
-                    encryptionKey={user?.securitySettings?.lastLoginAt.toString() || ''}
-                    accessLevel={AccessLevel.READ}
-                    theme={ThemePreference.LIGHT}
-                  />
-                </Suspense>
-              </Grid>
-            )}
-
-            {/* Role-specific Content */}
-            <Grid item xs={12}>
-              {userRole === UserRole.ADMIN && (
-                <Typography variant="h2" component="h2">
-                  System Overview
-                </Typography>
-              )}
-              {userRole === UserRole.INSURANCE && (
-                <Typography variant="h2" component="h2">
-                  Claims Dashboard
-                </Typography>
-              )}
-            </Grid>
+        {/* Health Metrics Section - Only for patients and providers */}
+        {(auth.user.role === UserRole.PATIENT || auth.user.role === UserRole.PROVIDER) && (
+          <Grid item xs={12}>
+            <Suspense fallback={<div>Loading health metrics...</div>}>
+              <HealthMetrics
+                patientId={auth.user.id}
+                refreshInterval={REFRESH_INTERVAL}
+                showHistory={true}
+                encryptionKey={auth.user.securitySettings?.lastLoginAt.toString() || ''}
+                accessLevel={AccessLevel.READ}
+                theme={ThemePreference.LIGHT}
+              />
+            </Suspense>
           </Grid>
-        </Container>
-      </ErrorBoundary>
-    </ThemeProvider>
-  );
-};
+        )}
 
-// Export with analytics wrapper
-export default Analytics.withAnalytics(HomePage);
+        {/* Role-specific Content */}
+        <Grid item xs={12}>
+          {auth.user.role === UserRole.ADMIN && (
+            <Typography variant="h2" component="h2">
+              System Overview
+            </Typography>
+          )}
+          {auth.user.role === UserRole.INSURANCE && (
+            <Typography variant="h2" component="h2">
+              Claims Dashboard
+            </Typography>
+          )}
+        </Grid>
+      </Grid>
+    </Container>
+  );
+}

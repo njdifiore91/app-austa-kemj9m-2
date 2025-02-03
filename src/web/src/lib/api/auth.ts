@@ -7,7 +7,7 @@
 
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'; // v1.4.0
 import CryptoJS from 'crypto-js'; // v4.1.1
-import winston from 'winston'; // v3.8.2
+import { logger } from '../utils/logger';
 
 import { AuthEndpoints } from '../constants/endpoints';
 import { 
@@ -19,16 +19,6 @@ import {
   SecurityEvent
 } from '../types/auth';
 import { encryptData, WebEncryptionService, EncryptionConfig } from '../utils/encryption';
-
-// Initialize secure logger for authentication events
-const securityLogger = winston.createLogger({
-  level: 'info',
-  format: winston.format.json(),
-  defaultMeta: { service: 'auth-api' },
-  transports: [
-    new winston.transports.File({ filename: 'security-events.log' })
-  ]
-});
 
 /**
  * Security configuration for authentication API
@@ -61,7 +51,7 @@ const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
  * HIPAA-compliant authentication API client
  */
 export class AuthAPI {
-  private client: AxiosInstance;
+  protected client: AxiosInstance;
   private readonly baseURL: string;
   private encryptionService: WebEncryptionService;
   private securityConfig: SecurityConfig;
@@ -155,7 +145,7 @@ export class AuthAPI {
    * Logs security events for audit compliance
    */
   private logSecurityEvent(event: SecurityEvent): void {
-    securityLogger.info('Security Event', { ...event });
+    logger.info('Security Event', { ...event });
   }
 
   /**
@@ -229,14 +219,96 @@ export class AuthAPI {
       throw this.handleAuthError(error);
     }
   }
+
+  /**
+   * Logs out the current user and cleans up session
+   */
+  public async logout(): Promise<void> {
+    try {
+      await this.client.post(AuthEndpoints.LOGOUT);
+      
+      this.logSecurityEvent({
+        eventType: 'USER_LOGOUT',
+        timestamp: Date.now(),
+        userId: 'anonymous',
+        sessionId: 'none',
+        metadata: {},
+        severity: 'LOW',
+        outcome: 'SUCCESS'
+      });
+    } catch (error) {
+      throw this.handleAuthError(error);
+    }
+  }
+
+  /**
+   * Refreshes the current session token
+   */
+  public async refreshToken(): Promise<IAuthTokens> {
+    try {
+      const response = await this.client.post(AuthEndpoints.REFRESH_TOKEN);
+      return response.data;
+    } catch (error) {
+      throw this.handleAuthError(error);
+    }
+  }
+
+  /**
+   * Verifies biometric authentication
+   */
+  public async verifyBiometric(credential: any): Promise<IAuthTokens> {
+    try {
+      const response = await this.client.post(
+        AuthEndpoints.VERIFY_BIOMETRIC,
+        { credential }
+      );
+      return response.data;
+    } catch (error) {
+      throw this.handleAuthError(error);
+    }
+  }
+
+  /**
+   * Validates device fingerprint for security
+   */
+  public async validateDeviceFingerprint(fingerprint: string): Promise<boolean> {
+    try {
+      await this.client.post(AuthEndpoints.VALIDATE_DEVICE, { fingerprint });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
 }
 
-// Export secure authentication functions
-export const login = async (
-  credentials: ILoginCredentials
-): Promise<IAuthTokens> => {
-  const authAPI = new AuthAPI(process.env.NEXT_PUBLIC_API_URL || '');
+// Create and export a singleton instance
+const authAPI = new AuthAPI(process.env.NEXT_PUBLIC_API_URL || '');
+
+// Export individual functions that use the singleton
+export const login = (credentials: ILoginCredentials): Promise<IAuthTokens> => {
   return authAPI.login(credentials);
 };
 
-export default AuthAPI;
+export const verifyMFA = (mfaCredentials: IMFACredentials): Promise<IAuthTokens> => {
+  return authAPI.verifyMFA(mfaCredentials);
+};
+
+export const logout = (): Promise<void> => {
+  return authAPI.logout();
+};
+
+export const refreshToken = (): Promise<IAuthTokens> => {
+  return authAPI.refreshToken();
+};
+
+export const verifyBiometric = (credential: any): Promise<IAuthTokens> => {
+  return authAPI.verifyBiometric(credential);
+};
+
+export const validateDeviceFingerprint = (fingerprint: string): Promise<boolean> => {
+  return authAPI.validateDeviceFingerprint(fingerprint);
+};
+
+// Export the class and default instance
+export type { AuthAPI };
+export default authAPI;

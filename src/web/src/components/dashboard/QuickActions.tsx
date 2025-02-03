@@ -1,8 +1,10 @@
+'use client';
+
 import React from 'react'; // ^18.0.0
 import styled from '@emotion/styled'; // ^11.11.0
 import { Button } from '../common/Button';
 import { UserRole } from '../../lib/types/user';
-import { Analytics, AnalyticsCategory, PrivacyLevel } from '../../lib/utils/analytics';
+import { Analytics } from '../../lib/utils/analytics';
 import { theme } from '../../styles/theme';
 
 // Security level enum for action classification
@@ -137,26 +139,21 @@ const handleActionClick = async (
   event.preventDefault();
 
   // Track secure analytics event
-  await Analytics.trackEvent({
+  Analytics.track('quick_action_click', {
     name: 'quick_action_click',
-    category: AnalyticsCategory.USER_INTERACTION,
+    category: Analytics.AnalyticsCategory.USER_INTERACTION,
     properties: {
       actionId: action.id,
       securityLevel: action.securityLevel,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      deviceId: securityContext.deviceId,
+      ipAddress: securityContext.ipAddress
     },
     timestamp: Date.now(),
     userConsent: true,
     privacyLevel: action.securityLevel === SecurityLevel.CRITICAL ? 
-      PrivacyLevel.SENSITIVE : 
-      PrivacyLevel.INTERNAL,
-    auditInfo: {
-      eventId: crypto.randomUUID(),
-      timestamp: Date.now(),
-      userId: 'anonymous', // Replace with actual user ID
-      ipAddress: securityContext.ipAddress,
-      actionType: 'quick_action_interaction'
-    }
+      Analytics.PrivacyLevel.SENSITIVE : 
+      Analytics.PrivacyLevel.INTERNAL
   });
 
   // Navigate to action URL

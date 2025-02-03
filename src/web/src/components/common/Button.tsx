@@ -1,7 +1,9 @@
+'use client';
+
 import React from 'react'; // ^18.0.0
 import styled from '@emotion/styled'; // ^11.11.0
 import { theme } from '../../styles/theme';
-import { Analytics, AnalyticsCategory, PrivacyLevel } from '../../lib/utils/analytics';
+import { Analytics } from '../../lib/utils/analytics';
 
 // Button size configurations with clinical touch targets
 const BUTTON_SIZES = {
@@ -176,41 +178,21 @@ const StyledButton = styled.button<ButtonProps>`
   }
 `;
 
-// Click handler with HIPAA-compliant analytics
-const handleClick = (
-  event: React.MouseEvent<HTMLButtonElement>,
-  props: ButtonProps
-) => {
-  if (props.disabled) {
-    event.preventDefault();
-    return;
-  }
-
-  // Track HIPAA-compliant interaction
-  Analytics.trackEvent({
+// Track button interactions
+const trackButtonClick = (props: Omit<ButtonProps, 'children' | 'onClick' | 'type' | 'className'>) => {
+  Analytics.track('button_click', {
     name: 'button_click',
-    category: AnalyticsCategory.USER_INTERACTION,
+    category: Analytics.AnalyticsCategory.USER_INTERACTION,
     properties: {
       variant: props.variant,
       size: props.size,
-      criticalAction: props.criticalAction,
-      componentId: props.className
+      disabled: props.disabled,
+      criticalAction: props.criticalAction
     },
     timestamp: Date.now(),
     userConsent: true,
-    privacyLevel: props.criticalAction ? 
-      PrivacyLevel.SENSITIVE : 
-      PrivacyLevel.PUBLIC,
-    auditInfo: {
-      eventId: crypto.randomUUID(),
-      timestamp: Date.now(),
-      userId: 'anonymous', // Should be replaced with actual user ID
-      ipAddress: 'masked',
-      actionType: 'button_interaction'
-    }
+    privacyLevel: Analytics.PrivacyLevel.PUBLIC
   });
-
-  props.onClick?.(event);
 };
 
 // Button component with clinical optimizations
@@ -235,7 +217,10 @@ export const Button: React.FC<ButtonProps> = ({
       fullWidth={fullWidth}
       highContrast={highContrast}
       criticalAction={criticalAction}
-      onClick={(e) => handleClick(e, { variant, size, disabled, criticalAction, onClick, className, children })}
+      onClick={(e) => {
+        trackButtonClick({ variant, size, disabled, criticalAction });
+        onClick?.(e);
+      }}
       type={type}
       className={className}
       role="button"

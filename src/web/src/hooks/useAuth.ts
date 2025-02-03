@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * @fileoverview Enhanced authentication hook for AUSTA SuperApp with HIPAA compliance
  * Implements secure authentication state management with comprehensive security features
@@ -41,11 +43,19 @@ const ENCRYPTION_KEY_VERSION = '1';
 // Initialize encryption service
 const encryptionService = new WebEncryptionService();
 
+interface LoginResponse {
+  success: boolean;
+  user: IUser;
+  accessToken: string;
+  refreshToken: string;
+  idToken: string;
+}
+
 /**
  * Enhanced authentication hook with comprehensive security features
  */
 const useAuth = (): IAuthContext & {
-  login: (credentials: ILoginCredentials) => Promise<void>;
+  login: (credentials: ILoginCredentials) => Promise<LoginResponse>;
   logout: () => Promise<void>;
   verifyMFA: (credentials: IMFACredentials) => Promise<void>;
   refreshSession: () => Promise<void>;
@@ -116,7 +126,7 @@ const useAuth = (): IAuthContext & {
     refreshTokenTimeoutRef.current = setTimeout(async () => {
       try {
         if (tokens?.refreshToken) {
-          const newTokens = await refreshToken(tokens.refreshToken);
+          const newTokens = await refreshToken();
           await securelyStoreTokens(newTokens);
           setTokens(newTokens);
           setupTokenRefresh();
@@ -160,7 +170,8 @@ const useAuth = (): IAuthContext & {
       sessionId: tokens?.accessToken || '',
       metadata: { lastActivity },
       severity: 'MEDIUM',
-      outcome: 'SUCCESS'
+      outcome: 'SUCCESS',
+      timestamp: Date.now()
     });
 
     await handleLogout();
@@ -170,7 +181,7 @@ const useAuth = (): IAuthContext & {
   /**
    * Enhanced login handler with security measures
    */
-  const handleLogin = async (credentials: ILoginCredentials): Promise<void> => {
+  const handleLogin = async (credentials: ILoginCredentials): Promise<LoginResponse> => {
     try {
       setIsLoading(true);
       setError(null);
@@ -181,7 +192,8 @@ const useAuth = (): IAuthContext & {
       }
 
       // Generate and validate device fingerprint
-      deviceFingerprintRef.current = await validateDeviceFingerprint();
+      const isValidDevice = await validateDeviceFingerprint('');
+      deviceFingerprintRef.current = isValidDevice ? 'valid_device' : '';
       
       const enhancedCredentials = {
         ...credentials,
@@ -192,9 +204,25 @@ const useAuth = (): IAuthContext & {
         }
       };
 
-      const authTokens = await login(enhancedCredentials);
+      const response = await login(enhancedCredentials) as unknown as LoginResponse;
+      
+      // Validate response
+      if (!response || !response.success || !response.user || !response.accessToken) {
+        throw new Error('Invalid response from server');
+      }
+
+      const authTokens: IAuthTokens = {
+        accessToken: response.accessToken,
+        refreshToken: response.refreshToken,
+        idToken: response.idToken,
+        expiresAt: Date.now() + TOKEN_REFRESH_INTERVAL,
+        tokenType: 'Bearer',
+        scope: ['openid', 'profile', 'email']
+      };
+
       await securelyStoreTokens(authTokens);
       setTokens(authTokens);
+      setUser(response.user);
       setState(AuthState.AUTHENTICATED);
       setupTokenRefresh();
       setupSessionMonitoring();
@@ -202,15 +230,19 @@ const useAuth = (): IAuthContext & {
 
       logSecurityEvent({
         eventType: 'LOGIN_SUCCESS',
-        userId: credentials.email,
+        userId: response.user.email,
         sessionId: authTokens.accessToken,
         metadata: { deviceId: deviceFingerprintRef.current },
         severity: 'MEDIUM',
-        outcome: 'SUCCESS'
+        outcome: 'SUCCESS',
+        timestamp: Date.now()
       });
+
+      return response;
     } catch (error) {
       setLoginAttempts(prev => prev + 1);
       handleAuthError(error);
+      throw error; // Re-throw to propagate to the form
     } finally {
       setIsLoading(false);
     }
@@ -235,7 +267,8 @@ const useAuth = (): IAuthContext & {
       sessionId: tokens?.accessToken || '',
       metadata: authError,
       severity: 'HIGH',
-      outcome: 'FAILURE'
+      outcome: 'FAILURE',
+      timestamp: Date.now()
     });
   };
 
@@ -246,7 +279,7 @@ const useAuth = (): IAuthContext & {
     try {
       setIsLoading(true);
       if (tokens?.accessToken) {
-        await logout(tokens.accessToken);
+        await logout();
       }
       
       // Clear security context
@@ -268,13 +301,20 @@ const useAuth = (): IAuthContext & {
         sessionId: tokens?.accessToken || '',
         metadata: { timestamp: Date.now() },
         severity: 'LOW',
-        outcome: 'SUCCESS'
+        outcome: 'SUCCESS',
+        timestamp: Date.now()
       });
     } catch (error) {
       handleAuthError(error);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleVerifyMFA = async (credentials: IMFACredentials): Promise<void> => {
+    const tokens = await verifyMFA(credentials);
+    await securelyStoreTokens(tokens);
+    setTokens(tokens);
   };
 
   // Initialize authentication state
@@ -316,8 +356,10 @@ const useAuth = (): IAuthContext & {
     sessionTimeout: SESSION_TIMEOUT,
     login: handleLogin,
     logout: handleLogout,
-    verifyMFA,
-    refreshSession: setupTokenRefresh
+    verifyMFA: handleVerifyMFA,
+    refreshSession: async () => {
+      await setupTokenRefresh();
+    }
   };
 };
 

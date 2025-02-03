@@ -166,3 +166,16 @@ export type SecurityEvent = {
     severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
     outcome: 'SUCCESS' | 'FAILURE' | 'ERROR';
 };
+
+export interface IUser {
+  id: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  phoneNumber?: string;
+  mfaEnabled?: boolean;
+  mfaType?: string;
+  lastLogin?: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
+}

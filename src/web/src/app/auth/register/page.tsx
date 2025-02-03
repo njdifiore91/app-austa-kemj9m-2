@@ -1,186 +1,190 @@
 /**
- * @fileoverview Next.js registration page component for AUSTA SuperApp
- * Implements HIPAA-compliant registration with OAuth 2.0 + OIDC, MFA, and biometric support
+ * @fileoverview HIPAA-compliant registration page component for AUSTA SuperApp
+ * Implements secure registration with OAuth 2.0, MFA, and biometric support
  * @version 1.0.0
  * @license HIPAA-compliant
  */
 
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { Auth0Provider } from '@auth0/auth0-react'; // v2.0.0
-import { startRegistration } from '@simplewebauthn/browser'; // v7.0.0
-import { WebEncryptionService } from '../../../lib/utils/encryption';
-import { ErrorTracker } from '../../../lib/constants/errorCodes';
+import styled from '@emotion/styled';
 
-// Internal imports
 import RegisterForm from '../../../components/auth/RegisterForm';
+import BiometricAuth from '../../../components/auth/BiometricAuth';
 import useAuth from '../../../hooks/useAuth';
-import { IUser } from '../../../lib/types/user';
-import { IAuthError, MFAMethod } from '../../../lib/types/auth';
+import { AuthState } from '../../../lib/types/auth';
 
-// Initialize security services
-const encryptionService = new WebEncryptionService();
+// Styled components with healthcare optimizations
+const StyledRegistrationPage = styled.main`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+  background-color: var(--clinical-background, #f5f7fa);
 
-/**
- * Enhanced registration page component with comprehensive security features
- */
-const RegisterPage: React.FC = () => {
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    background-color: var(--clinical-background-dark, #1a1a1a);
+  }
+
+  @media (forced-colors: active) {
+    border: 2px solid ButtonText;
+  }
+`;
+
+const RegistrationContainer = styled.div`
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 2rem;
+  background: var(--surface-background, #ffffff);
+  border-radius: 12px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+
+  @media (max-width: 768px) {
+    padding: 1.5rem;
+    margin: 1rem;
+  }
+`;
+
+const SecurityNotice = styled.div`
+  margin-top: 2rem;
+  padding: 1rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  text-align: center;
+`;
+
+const LoginLink = styled.div`
+  margin-top: 1.5rem;
+  text-align: center;
+  font-size: 0.875rem;
+
+  a {
+    color: var(--primary-color, #0066cc);
+    text-decoration: none;
+    font-weight: 500;
+    
+    &:hover {
+      text-decoration: underline;
+    }
+
+    &:focus {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+    }
+  }
+`;
+
+const RegistrationPage: React.FC = () => {
   const router = useRouter();
-  const { login } = useAuth();
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [securityContext, setSecurityContext] = useState<{
-    deviceFingerprint: string;
-    biometricSupport: boolean;
-  }>({
-    deviceFingerprint: '',
-    biometricSupport: false
+  const { state: authState } = useAuth();
+  
+  const [securityContext, setSecurityContext] = useState({
+    deviceType: '',
+    isClinicalEnvironment: false
   });
 
-  /**
-   * Initializes security context and device capabilities
-   */
   useEffect(() => {
-    const initializeSecurity = async () => {
+    const initializeSecurityContext = async () => {
       try {
-        // Check biometric support
-        const biometricSupport = await startRegistration({
-          challenge: 'biometric-check',
-          rp: {
-            name: 'AUSTA SuperApp',
-            id: window.location.hostname
-          },
-          user: {
-            id: 'temp-check',
-            name: 'temp-check',
-            displayName: 'Temporary Check'
-          },
-          pubKeyCredParams: [
-            { alg: -7, type: 'public-key' },
-            { alg: -257, type: 'public-key' }
-          ],
-          timeout: 60000,
-          attestation: 'none'
-        }).then(() => true).catch(() => false);
+        if (typeof window !== 'undefined') {
+          const userAgent = window.navigator.userAgent.toLowerCase();
+          const isMobileDevice = /mobile|tablet|ipad|android/.test(userAgent);
+          const isClinicalDevice = /medical_tablet|workstation|mobile_cart/.test(userAgent);
 
-        // Generate device fingerprint
-        const fingerprint = await generateDeviceFingerprint();
-
-        setSecurityContext({
-          deviceFingerprint: fingerprint,
-          biometricSupport
-        });
-
+          setSecurityContext({
+            deviceType: isMobileDevice ? 'mobile' : 'desktop',
+            isClinicalEnvironment: isClinicalDevice
+          });
+        }
       } catch (error) {
-        ErrorTracker.captureError(error as Error, {
-          context: 'Security initialization'
-        });
+        console.error('Security context initialization failed:', error);
       }
     };
 
-    initializeSecurity();
+    initializeSecurityContext();
   }, []);
 
-  /**
-   * Handles successful registration with enhanced security measures
-   */
-  const handleRegistrationSuccess = useCallback(async (
-    user: IUser,
-    mfaSetup: { type: MFAMethod; verified: boolean }
-  ) => {
+  const handleRegistrationSuccess = useCallback(async (user: any, mfaSetup: any) => {
     try {
-      setIsLoading(true);
-
-      // Encrypt sensitive PII fields
-      const encryptedUser = {
-        ...user,
-        profile: {
-          ...user.profile,
-          firstName: await encryptionService.encryptField(user.profile.firstName, 'pii'),
-          lastName: await encryptionService.encryptField(user.profile.lastName, 'pii'),
-          phoneNumber: await encryptionService.encryptField(user.profile.phoneNumber, 'pii')
-        }
-      };
-
-      // Perform login with enhanced security
-      await login({
-        email: user.email,
-        password: '', // Password already handled by Auth0
-        rememberMe: false,
-        deviceId: securityContext.deviceFingerprint,
-        clientMetadata: {
-          registrationTimestamp: Date.now().toString(),
-          userAgent: navigator.userAgent
-        }
+      console.info('Registration successful', {
+        timestamp: Date.now(),
+        deviceType: securityContext.deviceType,
+        isClinicalEnvironment: securityContext.isClinicalEnvironment
       });
 
-      // Redirect based on MFA setup
-      if (!mfaSetup.verified) {
-        router.push('/auth/mfa-setup');
+      if (mfaSetup.verified) {
+        router.push('/auth/login');
       } else {
-        router.push('/dashboard');
+        router.push('/auth/mfa-setup');
       }
-
     } catch (error) {
-      await handleRegistrationError(error as IAuthError);
-    } finally {
-      setIsLoading(false);
+      console.error('Registration success handling failed:', error);
     }
-  }, [login, router, securityContext]);
+  }, [router, securityContext]);
 
-  /**
-   * Handles registration errors with security logging
-   */
-  const handleRegistrationError = async (error: IAuthError) => {
-    ErrorTracker.captureError(new Error(error.message), {
-      context: 'Registration',
-      errorCode: error.code
+  const handleRegistrationError = useCallback((error: any) => {
+    console.error('Registration failed', {
+      timestamp: Date.now(),
+      error: error.message,
+      deviceType: securityContext.deviceType
     });
-  };
-
-  /**
-   * Generates secure device fingerprint
-   */
-  const generateDeviceFingerprint = async (): Promise<string> => {
-    const components = [
-      navigator.userAgent,
-      navigator.language,
-      new Date().getTimezoneOffset(),
-      screen.width,
-      screen.height,
-      navigator.hardwareConcurrency
-    ];
-
-    const fingerprint = await crypto.subtle.digest(
-      'SHA-256',
-      new TextEncoder().encode(components.join('|'))
-    );
-
-    return Array.from(new Uint8Array(fingerprint))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-  };
+  }, [securityContext]);
 
   return (
-    <Auth0Provider
-      domain={process.env.NEXT_PUBLIC_AUTH0_DOMAIN!}
-      clientId={process.env.NEXT_PUBLIC_AUTH0_CLIENT_ID!}
-      authorizationParams={{
-        redirect_uri: window.location.origin,
-        audience: process.env.NEXT_PUBLIC_AUTH0_AUDIENCE,
-        scope: "openid profile email"
-      }}
+    <StyledRegistrationPage
+      role="main"
+      aria-label="Healthcare platform registration"
     >
-      <div className="register-page">
+      <RegistrationContainer>
+        {/* Biometric setup for supported devices */}
+        {securityContext.deviceType && (
+          <BiometricAuth
+            onSuccess={handleRegistrationSuccess}
+            onError={handleRegistrationError}
+            clinicalMode={securityContext.isClinicalEnvironment}
+            accessibilityMode={true}
+            deviceType={securityContext.deviceType}
+            isRegistration={true}
+          />
+        )}
+
+        {/* Main registration form */}
         <RegisterForm
           onSuccess={handleRegistrationSuccess}
           onError={handleRegistrationError}
-          isLoading={isLoading}
+          onSecurityEvent={(event) => {
+            console.info('Security event:', event);
+          }}
         />
-      </div>
-    </Auth0Provider>
+
+        {/* Login Link */}
+        <LoginLink>
+          Already have an account?{' '}
+          <a href="/auth/login" onClick={(e) => {
+            e.preventDefault();
+            router.push('/auth/login');
+          }}>
+            Login here
+          </a>
+        </LoginLink>
+
+        {/* Security notice */}
+        <SecurityNotice role="note" aria-live="polite">
+          This system is protected by enhanced security measures and complies with HIPAA regulations.
+          All registration attempts are monitored and logged.
+        </SecurityNotice>
+      </RegistrationContainer>
+    </StyledRegistrationPage>
   );
 };
 
-export default RegisterPage;
+export default RegistrationPage;
