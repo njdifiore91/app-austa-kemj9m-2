@@ -36,7 +36,7 @@
     "express-validator": "^7.0.0",
     "hpp": "^0.2.3",
     "rate-limiter-flexible": "^2.4.1",
-    "circuit-breaker-js": "^0.0.3",
+    "circuit-breaker-js": "^0.0.1",
     "prom-client": "^14.2.0",
     "cache-manager": "^5.2.0",
     "@opentelemetry/api": "^1.4.0"
