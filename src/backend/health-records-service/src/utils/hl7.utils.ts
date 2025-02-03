@@ -12,7 +12,7 @@ import {
   IHealthRecordValidationError
 } from '../../../shared/interfaces/health-record.interface';
 import { ErrorCode, ErrorMessage } from '../../../shared/constants/error-codes';
-import * as hl7 from 'node-hl7-parser'; // v1.4.0
+import * as hl7 from 'hl7-parser'; // v1.4.0
 import * as fhir from 'fhir'; // v4.11.2
 import * as winston from 'winston'; // v3.10.0
 import { 
