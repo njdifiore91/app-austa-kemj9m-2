@@ -14,8 +14,7 @@
     "format": "prettier --write src/**/*.ts",
     "security:audit": "npm audit --audit-level=high",
     "docker:build": "docker build -t austa-api-gateway .",
-    "docker:run": "docker run -p 3000:3000 austa-api-gateway",
-    "prepare": "husky install"
+    "docker:run": "docker run -p 3000:3000 austa-api-gateway"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -51,7 +50,6 @@
     "ts-jest": "^29.1.1",
     "eslint": "^8.46.0",
     "prettier": "^3.0.1",
-    "husky": "^8.0.3",
     "supertest": "^6.3.3",
     "sinon": "^15.0.0",
     "nock": "^13.3.8",
