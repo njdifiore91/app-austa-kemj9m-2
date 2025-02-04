@@ -18,6 +18,7 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "node",
@@ -34,22 +35,14 @@
     "paths": {
       "@shared/*": ["shared/*"],
       "@auth/*": ["auth-service/src/*"],
-      "@claims/*": ["claims-service/src/*"],
-      "@health-records/*": ["health-records-service/src/*"],
-      "@marketplace/*": ["marketplace-service/src/*"],
-      "@virtual-care/*": ["virtual-care-service/src/*"],
-      "@api-gateway/*": ["api-gateway/src/*"]
+      "@virtual-care/*": ["virtual-care-service/src/*"]
     },
     "typeRoots": ["./node_modules/@types", "./shared/types"],
     "types": ["node", "jest", "express"]
   },
   "include": [
-    "api-gateway/src/**/*",
     "auth-service/src/**/*",
     "virtual-care-service/src/**/*",
-    "health-records-service/src/**/*",
-    "claims-service/src/**/*",
-    "marketplace-service/src/**/*",
     "shared/**/*"
   ],
   "exclude": [

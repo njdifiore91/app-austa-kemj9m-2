@@ -9,14 +9,13 @@ import * as dotenv from "dotenv"
 dotenv.config()
 
 import "reflect-metadata"
-import express, { Express, Request, Response, NextFunction } from "express" // v4.18.2
-import helmet from "helmet" // v7.0.0
-import cors from "cors" // v2.8.5
-import session from "express-session" // v1.17.3
-import { createClient } from "redis"
+import express, { Express, Request, Response, NextFunction } from "express"
+import helmet from "helmet"
+import cors from "cors"
+import session from "express-session"
 import Redis from "ioredis"
-import rateLimit from "express-rate-limit" // v6.9.0
-import winston from "winston" // v3.10.0
+import rateLimit from "express-rate-limit"
+import winston from "winston"
 import { AUTH_CONFIG } from "./config/auth.config"
 import AuthController from "./controllers/auth.controller"
 import AuthService from "./services/auth.service"
@@ -27,9 +26,7 @@ import { HttpStatus } from "../../shared/constants/http-status"
 import { Model } from "mongoose"
 import { Auth0Client } from "@auth0/auth0-spa-js"
 import User, { IUserDocument } from "./models/user.model"
-import { IUser } from "../../shared/interfaces/user.interface"
 import { Container } from "inversify"
-import * as connectRedis from "connect-redis"
 
 // Initialize Express application
 const app: Express = express()
@@ -43,9 +40,10 @@ const redisClient = new Redis({
   tls: AUTH_CONFIG.redis.tls.enabled ? {} : undefined,
 })
 
-// Import RedisStore
-const RedisStore = connectRedis.default(session)
-const redisStore = new RedisStore({
+// Initialize Redis store for sessions
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const RedisStore = require("connect-redis")(session)
+const sessionStore = new RedisStore({
   client: redisClient,
   prefix: "session:",
 })
@@ -141,7 +139,7 @@ const setupSecurityMiddleware = async (app: Express): Promise<void> => {
   // Configure secure session management
   app.use(
     session({
-      store: redisStore,
+      store: sessionStore,
       name: AUTH_CONFIG.session.name,
       secret: AUTH_CONFIG.session.secret,
       resave: false,

@@ -5,7 +5,7 @@
     "rootDir": "..",
     "baseUrl": ".",
     "composite": true,
-    "tsBuildInfoFile": "./dist/auth-service.tsbuildinfo",
+    "tsBuildInfoFile": "./dist/virtual-care-service.tsbuildinfo",
     "paths": {
       "@shared/*": ["../shared/*"]
     }

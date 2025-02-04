@@ -1,61 +1,65 @@
 # Build stage
 FROM node:18-alpine AS builder
 
-# Install build essentials
+# Install build dependencies
 RUN apk add --no-cache \
     python3 \
     make \
-    g++ \
-    curl
+    g++
 
-# Set working directory
-WORKDIR /app
+WORKDIR /app/virtual-care-service
 
-# Copy package files for dependency caching
-COPY package*.json ./
-COPY tsconfig.json ./
+# Copy package files
+COPY virtual-care-service/package*.json ./
+COPY package-lock.json ./
 
-# Install dependencies with npm ci for reproducible builds
-RUN npm ci
+# Copy tsconfig files
+COPY virtual-care-service/tsconfig.json ./tsconfig.json
+COPY tsconfig.json ../tsconfig.json
+
+# Copy shared directory
+COPY shared/ ../shared/
+
+# Install dependencies
+RUN npm install \
+    && npm cache clean --force
 
 # Copy source code
-COPY src/ ./src/
+COPY virtual-care-service/src/ ./src/
 
-# Build TypeScript with production optimizations
-RUN npm run build
-
-# Prune dev dependencies
-RUN npm prune --production
+# Build the application
+RUN npm run build \
+    && npm prune --production \
+    && npm cache clean --force
 
 # Production stage
-FROM node:18-alpine
+FROM node:18-alpine AS production
 
 # Create non-root user/group
-RUN addgroup -g 1000 nodegroup && \
-    adduser -u 1000 -G nodegroup -s /bin/sh -D nodeuser
+RUN addgroup -g 2000 vcgroup && \
+    adduser -u 2000 -G vcgroup -s /bin/sh -D vcuser
 
-# Set working directory
 WORKDIR /app
 
-# Copy production dependencies and compiled code
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY package.json ./
+# Copy production files
+COPY --from=builder /app/virtual-care-service/package*.json ./
+COPY --from=builder /app/virtual-care-service/node_modules ./node_modules
+COPY --from=builder /app/virtual-care-service/dist ./dist
 
 # Set strict file permissions
-RUN chown -R nodeuser:nodegroup /app && \
+RUN chown -R vcuser:vcgroup /app && \
     chmod -R 644 /app && \
     find /app -type d -exec chmod 755 {} \;
 
 # Configure production environment
 ENV NODE_ENV=production \
     PORT=3002 \
-    NODE_OPTIONS="--max-old-space-size=2048 --max-http-header-size=16384" \
+    NODE_OPTIONS="--max-old-space-size=2048" \
     UV_THREADPOOL_SIZE=4
 
 # Create and configure log volume
 RUN mkdir -p /app/logs && \
-    chown -R nodeuser:nodegroup /app/logs && \
+    chown -R vcuser:vcgroup /app/logs && \
     chmod 644 /app/logs
 
 # Expose service port
@@ -65,11 +69,11 @@ EXPOSE 3002
 VOLUME ["/app/logs"]
 
 # Switch to non-root user
-USER nodeuser
+USER vcuser
 
 # Health check configuration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:3002/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
 
 # Add metadata labels
 LABEL maintainer="AUSTA Healthcare" \
@@ -83,11 +87,8 @@ LABEL maintainer="AUSTA Healthcare" \
 # Security hardening
 RUN apk add --no-cache curl && \
     rm -rf /var/cache/apk/* && \
-    echo "nodeuser soft nofile 65535" >> /etc/security/limits.conf && \
-    echo "nodeuser hard nofile 65535" >> /etc/security/limits.conf
-
-# Set security options
-SECURITY_OPTS="--security-opt=no-new-privileges:true"
+    echo "vcuser soft nofile 65535" >> /etc/security/limits.conf && \
+    echo "vcuser hard nofile 65535" >> /etc/security/limits.conf
 
 # Start application with Node.js optimizations
-CMD ["node", "--enable-source-maps", "dist/index.js"]
+CMD ["node", "dist/src/index.js"]

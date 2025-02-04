@@ -7,12 +7,12 @@
 
 import { injectable, inject } from "inversify"
 import { Model } from "mongoose"
-import * as bcrypt from "bcrypt" // v5.1.0
 import Redis from "ioredis" // v4.6.7
-import { Auth0Client } from "@auth0/auth0-spa-js" // v2.1.2
+import { AuthenticationClient } from "auth0"
 import * as crypto from "crypto"
+import * as speakeasy from "speakeasy" // For TOTP MFA validation
 
-import User, { IUserDocument } from "../models/user.model"
+import { IUserDocument } from "../models/user.model"
 import {
   generateToken,
   verifyToken,
@@ -28,9 +28,7 @@ import { validateUserData } from "../../../shared/utils/validation.utils"
 const MAX_LOGIN_ATTEMPTS = 5
 const LOCKOUT_DURATION = 900 // 15 minutes in seconds
 const TOKEN_BLACKLIST_PREFIX = "bl:"
-const DEVICE_FINGERPRINT_SALT = "unique_salt_value"
 const SESSION_TIMEOUT = 3600 // 1 hour in seconds
-const MFA_CODE_EXPIRY = 300 // 5 minutes in seconds
 
 /**
  * Interface for login credentials with enhanced security features
@@ -71,18 +69,21 @@ interface IAuthService {
 class AuthService implements IAuthService {
   private userModel: Model<IUserDocument>
   private redisClient: Redis
-  private auth0Client: Auth0Client
+  private auth0Client: AuthenticationClient
   private securityMetrics: any
 
   constructor(
     @inject("UserModel") userModel: Model<IUserDocument>,
     @inject("RedisClient") redisClient: Redis,
-    @inject("Auth0Client") auth0Client: Auth0Client,
     @inject("SecurityMetrics") securityMetrics: any
   ) {
     this.userModel = userModel
     this.redisClient = redisClient
-    this.auth0Client = auth0Client
+    this.auth0Client = new AuthenticationClient({
+      domain: AUTH_CONFIG.oauth2.domain,
+      clientId: AUTH_CONFIG.oauth2.clientId,
+      clientSecret: AUTH_CONFIG.oauth2.clientSecret,
+    })
     this.securityMetrics = securityMetrics
   }
 
@@ -101,79 +102,98 @@ class AuthService implements IAuthService {
       // Check IP-based rate limiting
       await this.checkRateLimit(credentials.ipAddress)
 
-      // Find user and validate status
-      const user = await this.userModel
-        .findOne({ email: credentials.email })
-        .select("+password +securitySettings")
-        .exec()
+      try {
+        // Authenticate with Auth0
+        const auth0Response = await this.auth0Client.oauth.passwordGrant({
+          username: credentials.email,
+          password: credentials.password,
+          scope: AUTH_CONFIG.oauth2.scope.join(" "),
+          audience: AUTH_CONFIG.oauth2.domain,
+        })
 
-      if (!user) {
-        throw new Error(ErrorCode.INVALID_CREDENTIALS)
-      }
-
-      // Check account status
-      if (user.status !== UserStatus.ACTIVE) {
-        throw new Error(ErrorCode.UNAUTHORIZED)
-      }
-
-      // Verify password
-      const isValidPassword = await user.comparePassword(credentials.password)
-      if (!isValidPassword) {
-        await this.handleFailedLogin(user.id)
-        throw new Error(ErrorCode.INVALID_CREDENTIALS)
-      }
-
-      // Validate MFA if enabled
-      if (user.securitySettings.mfaEnabled) {
-        const isMfaValid = await this.validateMFA(
-          user.id,
-          credentials.mfaCode || ""
+        // Get user info from Auth0
+        const auth0User = await this.auth0Client.getProfile(
+          auth0Response.access_token
         )
-        if (!isMfaValid) {
+
+        // Find or create user in our database
+        let user = await this.userModel.findOne({ email: credentials.email })
+        if (!user) {
+          user = await this.userModel.create({
+            email: credentials.email,
+            status: UserStatus.ACTIVE,
+            role: "user",
+            auth0Id: auth0User.sub,
+            securitySettings: {
+              mfaEnabled: AUTH_CONFIG.security.mfa.required,
+              loginAttempts: 0,
+              lastPasswordChange: new Date(),
+            },
+          })
+        }
+
+        // Check account status
+        if (user.status !== UserStatus.ACTIVE) {
           throw new Error(ErrorCode.UNAUTHORIZED)
         }
+
+        // Validate MFA if enabled
+        if (user.securitySettings.mfaEnabled) {
+          const isMfaValid = await this.validateMFA(
+            user.id,
+            credentials.mfaCode || ""
+          )
+          if (!isMfaValid) {
+            throw new Error(ErrorCode.UNAUTHORIZED)
+          }
+        }
+
+        // Validate device fingerprint
+        const isValidDevice = await this.validateDeviceFingerprint(
+          user.id,
+          credentials.deviceFingerprint
+        )
+
+        if (!isValidDevice) {
+          await this.trackSecurityMetrics(user.id, "UNKNOWN_DEVICE_LOGIN")
+        }
+
+        // Generate token with fingerprint
+        const tokenPayload = {
+          userId: user.id,
+          email: user.email,
+          roles: [user.role],
+          permissions: user.permissions,
+          sessionId: crypto.randomUUID(),
+          deviceId: credentials.deviceFingerprint,
+          ipAddress: credentials.ipAddress,
+          fingerprint: "",
+          auditId: crypto.randomUUID(),
+          auth0Token: auth0Response.access_token,
+        }
+
+        const fingerprint = generateTokenFingerprint()
+        tokenPayload.fingerprint = fingerprint
+
+        const token = await generateToken(tokenPayload)
+
+        // Store session in Redis
+        await this.storeSession(user.id, tokenPayload)
+
+        // Track successful login
+        await this.trackSecurityMetrics(user.id, "SUCCESSFUL_LOGIN")
+
+        // Update user's last login
+        user.securitySettings.lastLoginAt = new Date()
+        user.securitySettings.lastLoginIP = credentials.ipAddress
+        await user.save()
+
+        return { token, fingerprint, user }
+      } catch (auth0Error) {
+        // Handle Auth0 authentication errors
+        await this.handleFailedLogin(credentials.email)
+        throw new Error(ErrorCode.INVALID_CREDENTIALS)
       }
-
-      // Validate device fingerprint
-      const isValidDevice = await this.validateDeviceFingerprint(
-        user.id,
-        credentials.deviceFingerprint
-      )
-
-      if (!isValidDevice) {
-        await this.trackSecurityMetrics(user.id, "UNKNOWN_DEVICE_LOGIN")
-      }
-
-      // Generate token with fingerprint
-      const tokenPayload = {
-        userId: user.id,
-        email: user.email,
-        roles: [user.role],
-        permissions: user.permissions,
-        sessionId: crypto.randomUUID(),
-        deviceId: credentials.deviceFingerprint,
-        ipAddress: credentials.ipAddress,
-        fingerprint: "",
-        auditId: crypto.randomUUID(),
-      }
-
-      const fingerprint = generateTokenFingerprint()
-      tokenPayload.fingerprint = fingerprint
-
-      const token = await generateToken(tokenPayload)
-
-      // Store session in Redis
-      await this.storeSession(user.id, tokenPayload)
-
-      // Track successful login
-      await this.trackSecurityMetrics(user.id, "SUCCESSFUL_LOGIN")
-
-      // Update user's last login
-      user.securitySettings.lastLoginAt = new Date()
-      user.securitySettings.lastLoginIP = credentials.ipAddress
-      await user.save()
-
-      return { token, fingerprint, user }
     } catch (error) {
       await this.trackSecurityMetrics("unknown", "FAILED_LOGIN")
       throw error
@@ -339,16 +359,33 @@ class AuthService implements IAuthService {
   }
 
   public async validateMFA(userId: string, code: string): Promise<boolean> {
-    // Implementation of MFA validation logic
-    return true // Placeholder
+    const mfaSecret = await this.redisClient.get(`mfa:${userId}`)
+    if (!mfaSecret) return false
+
+    // Validate TOTP code using speakeasy
+    return speakeasy.totp.verify({
+      secret: mfaSecret,
+      encoding: "base32",
+      token: code,
+      window: 1, // Allow 30 seconds window
+    })
   }
 
   public async validateDeviceFingerprint(
     userId: string,
     fingerprint: string
   ): Promise<boolean> {
-    // Implementation of device fingerprint validation
-    return true // Placeholder
+    const storedFingerprints = await this.redisClient.smembers(
+      `devices:${userId}`
+    )
+
+    if (storedFingerprints.includes(fingerprint)) {
+      return true
+    }
+
+    // If it's a new device, store it after validation
+    await this.redisClient.sadd(`devices:${userId}`, fingerprint)
+    return true
   }
 
   public async trackSecurityMetrics(

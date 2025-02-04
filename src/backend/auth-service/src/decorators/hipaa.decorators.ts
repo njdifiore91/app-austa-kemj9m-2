@@ -22,8 +22,8 @@ export function securityAudit() {
 // HIPAA validation decorator
 export function hipaaValidate() {
   return function (
-    target: any,
-    propertyKey: string,
+    _target: any,
+    _propertyKey: string,
     descriptor: PropertyDescriptor
   ) {
     const originalMethod = descriptor.value
@@ -40,8 +40,8 @@ export function hipaaValidate() {
 // Audit logging decorator
 export function auditLog() {
   return function (
-    target: any,
-    propertyKey: string,
+    _target: any,
+    _propertyKey: string,
     descriptor: PropertyDescriptor
   ) {
     const originalMethod = descriptor.value
@@ -61,8 +61,8 @@ export function middleware(
   middlewareFn: (req: Request, res: Response, next: NextFunction) => void
 ) {
   return function (
-    target: any,
-    propertyKey: string,
+    _target: any,
+    _propertyKey: string,
     descriptor: PropertyDescriptor
   ) {
     const originalMethod = descriptor.value

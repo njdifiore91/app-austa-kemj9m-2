@@ -6,8 +6,6 @@
 
 import * as dotenv from "dotenv"
 import * as crypto from "crypto"
-import { ErrorCode } from "../../../shared/constants/error-codes"
-import { HttpStatus } from "../../../shared/constants/http-status"
 
 /**
  * Interface defining comprehensive HIPAA-compliant authentication configuration
