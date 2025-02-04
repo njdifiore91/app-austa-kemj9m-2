@@ -157,7 +157,7 @@ class AuthService implements IAuthService {
         auditId: crypto.randomUUID(),
       }
 
-      const fingerprint = generateTokenFingerprint(tokenPayload)
+      const fingerprint = generateTokenFingerprint()
       tokenPayload.fingerprint = fingerprint
 
       const token = await generateToken(tokenPayload)
@@ -222,7 +222,7 @@ class AuthService implements IAuthService {
         auditId: crypto.randomUUID(),
       }
 
-      const fingerprint = generateTokenFingerprint(tokenPayload)
+      const fingerprint = generateTokenFingerprint()
       tokenPayload.fingerprint = fingerprint
 
       const token = await generateToken(tokenPayload)
@@ -278,6 +278,33 @@ class AuthService implements IAuthService {
     }
   }
 
+  /**
+   * Validates a token
+   */
+  public async validateToken(token: string): Promise<boolean> {
+    try {
+      const decoded = await verifyToken(token)
+
+      // Check if token is blacklisted
+      const isBlacklisted = await this.redisClient.exists(
+        `${TOKEN_BLACKLIST_PREFIX}${decoded.userId}`
+      )
+
+      if (isBlacklisted) {
+        return false
+      }
+
+      // Verify session exists
+      const sessionExists = await this.redisClient.exists(
+        `session:${decoded.userId}`
+      )
+
+      return sessionExists === 1
+    } catch (error) {
+      return false
+    }
+  }
+
   // Private helper methods
 
   private async checkRateLimit(ipAddress: string): Promise<void> {
@@ -311,12 +338,12 @@ class AuthService implements IAuthService {
     )
   }
 
-  private async validateMFA(userId: string, code: string): Promise<boolean> {
+  public async validateMFA(userId: string, code: string): Promise<boolean> {
     // Implementation of MFA validation logic
     return true // Placeholder
   }
 
-  private async validateDeviceFingerprint(
+  public async validateDeviceFingerprint(
     userId: string,
     fingerprint: string
   ): Promise<boolean> {
@@ -324,14 +351,13 @@ class AuthService implements IAuthService {
     return true // Placeholder
   }
 
-  private async trackSecurityMetrics(
+  public async trackSecurityMetrics(
     userId: string,
     event: string
   ): Promise<void> {
     await this.securityMetrics.trackEvent({
+      type: event,
       userId,
-      event,
-      timestamp: new Date(),
       metadata: {
         service: "auth-service",
         environment: process.env.NODE_ENV,

@@ -36,4 +36,19 @@ export class SecurityMetrics {
   ): void {
     // Implementation
   }
+
+  /**
+   * Track security-related events
+   * @param event Event details
+   */
+  async trackEvent(event: {
+    type: string
+    userId?: string
+    metadata?: Record<string, unknown>
+  }): Promise<void> {
+    await this.recordSecurityEvent(event.type, {
+      userId: event.userId,
+      ...event.metadata,
+    })
+  }
 }

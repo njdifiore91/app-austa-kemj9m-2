@@ -5,200 +5,126 @@
  * @version 1.0.0
  */
 
-import { sign, verify, JsonWebTokenError, TokenExpiredError } from 'jsonwebtoken';
-import { createHash, randomBytes } from 'crypto';
-import { AUTH_CONFIG } from '../config/auth.config';
-import { ErrorCode } from '../../../shared/constants/error-codes';
+import * as jwt from "jsonwebtoken"
+import * as crypto from "crypto"
+import { AUTH_CONFIG } from "../config/auth.config"
+import { ErrorCode } from "../../../shared/constants/error-codes"
+import { Secret, SignOptions, JwtPayload } from "jsonwebtoken"
 
 /**
  * Enhanced interface defining JWT token payload structure with HIPAA compliance fields
  */
 export interface TokenPayload {
-  userId: string;
-  email: string;
-  roles: string[];
-  permissions: string[];
-  sessionId: string;
-  deviceId: string;
-  ipAddress: string;
-  fingerprint: string;
-  auditId: string;
-  iat?: number;
-  exp?: number;
-  lastAccess?: number;
+  userId: string
+  email: string
+  roles: string[]
+  permissions: string[]
+  sessionId: string
+  deviceId: string
+  ipAddress: string
+  fingerprint: string
+  auditId: string
+  iat?: number
+  exp?: number
+  lastAccess?: number
+  [key: string]: unknown
 }
+
+type StringValue = string & { __brand: "StringValue" }
 
 /**
  * Enhanced interface for token generation options with security parameters
  */
 export interface TokenOptions {
-  expiresIn?: string | number;
-  audience?: string;
-  issuer?: string;
-  algorithm?: string;
-  keyId?: string;
-  jwtid?: string;
-  subject?: string;
-  notBefore?: number;
+  expiresIn?: number | StringValue
+  issuer?: string
 }
 
 // Constants for token management
-const TOKEN_EXPIRATION = AUTH_CONFIG.jwt.expiresIn;
-const REFRESH_TOKEN_EXPIRATION = AUTH_CONFIG.jwt.refreshExpiresIn;
-const TOKEN_ISSUER = AUTH_CONFIG.jwt.issuer;
-const ALGORITHM = AUTH_CONFIG.jwt.algorithm;
-const MIN_KEY_LENGTH = 2048;
-const MAX_REFRESH_COUNT = 5;
-const REVOCATION_CHECK_INTERVAL = 60000;
+const TOKEN_EXPIRATION = AUTH_CONFIG.jwt.expiresIn
+const REFRESH_TOKEN_EXPIRATION = AUTH_CONFIG.jwt.refreshExpiresIn
+const TOKEN_ISSUER = AUTH_CONFIG.jwt.issuer
+const ALGORITHM = AUTH_CONFIG.jwt.algorithm
+const MIN_KEY_LENGTH = 2048
+const MAX_REFRESH_COUNT = 5
+const REVOCATION_CHECK_INTERVAL = 60000
 
 /**
- * Generates a secure token fingerprint using device and session information
- * @param {TokenPayload} payload - Token payload containing session data
- * @returns {string} Cryptographic fingerprint
+ * Generate a token fingerprint for additional security
  */
-const generateTokenFingerprint = (payload: TokenPayload): string => {
-  const fingerprintData = `${payload.sessionId}:${payload.deviceId}:${payload.ipAddress}`;
-  return createHash('sha256').update(fingerprintData).digest('hex');
-};
+export function generateTokenFingerprint(): string {
+  return crypto.randomBytes(32).toString("hex")
+}
 
 /**
- * Generates a secure JWT token with enhanced payload and fingerprinting
- * @param {TokenPayload} payload - Token payload with user and session data
- * @param {TokenOptions} options - Token generation options
- * @returns {string} Generated JWT token with security enhancements
+ * Generate a JWT token with the given payload
  */
-export const generateToken = async (
+export async function generateToken(
   payload: TokenPayload,
   options: TokenOptions = {}
-): Promise<string> => {
-  try {
-    // Validate required payload fields
-    if (!payload.userId || !payload.email || !payload.roles) {
-      throw new Error('Missing required payload fields');
-    }
-
-    // Generate token fingerprint
-    const fingerprint = generateTokenFingerprint(payload);
-    
-    // Add security and compliance fields
-    const enhancedPayload = {
-      ...payload,
-      fingerprint,
-      auditId: randomBytes(16).toString('hex'),
-      iat: Math.floor(Date.now() / 1000),
-      lastAccess: Date.now()
-    };
-
-    // Configure token options with security defaults
-    const tokenOptions = {
-      expiresIn: TOKEN_EXPIRATION,
-      issuer: TOKEN_ISSUER,
-      algorithm: ALGORITHM,
-      ...options
-    };
-
-    // Sign token with private key
-    return sign(enhancedPayload, AUTH_CONFIG.jwt.privateKey, tokenOptions);
-  } catch (error) {
-    throw new Error(`Token generation failed: ${error.message}`);
+): Promise<string> {
+  const privateKey = process.env.JWT_PRIVATE_KEY
+  if (!privateKey) {
+    throw new Error(ErrorCode.INTERNAL_SERVER_ERROR)
   }
-};
+
+  const signOptions: SignOptions = {
+    algorithm: "RS256",
+    expiresIn: 3600, // 1 hour in seconds
+    issuer: options.issuer || "auth-service",
+  }
+
+  return new Promise((resolve, reject) => {
+    jwt.sign(payload, privateKey as Secret, signOptions, (err, token) => {
+      if (err || !token) {
+        reject(new Error(ErrorCode.UNAUTHORIZED))
+      } else {
+        resolve(token)
+      }
+    })
+  })
+}
 
 /**
- * Comprehensive token verification with security checks
- * @param {string} token - JWT token to verify
- * @returns {TokenPayload} Verified and decoded token payload
+ * Verify a JWT token
  */
-export const verifyToken = async (token: string): Promise<TokenPayload> => {
-  try {
-    // Verify token signature and expiration
-    const decoded = verify(token, AUTH_CONFIG.jwt.publicKey, {
-      algorithms: [ALGORITHM],
-      issuer: TOKEN_ISSUER
-    }) as TokenPayload;
-
-    // Verify token fingerprint
-    const currentFingerprint = generateTokenFingerprint(decoded);
-    if (currentFingerprint !== decoded.fingerprint) {
-      throw new Error(ErrorCode.UNAUTHORIZED);
-    }
-
-    // Update last access timestamp
-    decoded.lastAccess = Date.now();
-
-    return decoded;
-  } catch (error) {
-    if (error instanceof TokenExpiredError) {
-      throw new Error(ErrorCode.TOKEN_EXPIRED);
-    }
-    throw new Error(ErrorCode.UNAUTHORIZED);
+export async function verifyToken(token: string): Promise<TokenPayload> {
+  const publicKey = process.env.JWT_PUBLIC_KEY
+  if (!publicKey) {
+    throw new Error(ErrorCode.INTERNAL_SERVER_ERROR)
   }
-};
+
+  return new Promise((resolve, reject) => {
+    jwt.verify(token, publicKey as Secret, (err, decoded) => {
+      if (err || !decoded) {
+        reject(new Error(ErrorCode.UNAUTHORIZED))
+      } else {
+        resolve(decoded as TokenPayload)
+      }
+    })
+  })
+}
 
 /**
- * Securely refreshes token while maintaining audit trail
- * @param {string} oldToken - Current token to refresh
- * @param {boolean} extendedSession - Whether to grant extended session
- * @returns {string} New JWT token with updated expiration
+ * Refresh a JWT token
  */
-export const refreshToken = async (
-  oldToken: string,
-  extendedSession: boolean = false
-): Promise<string> => {
+export async function refreshToken(oldToken: string): Promise<string> {
   try {
-    // Verify current token
-    const decoded = await verifyToken(oldToken);
-
-    // Generate new session and audit IDs
-    const newSessionId = randomBytes(16).toString('hex');
-    const newAuditId = randomBytes(16).toString('hex');
-
-    // Create new token payload
-    const newPayload: TokenPayload = {
-      ...decoded,
-      sessionId: newSessionId,
-      auditId: newAuditId,
-      lastAccess: Date.now()
-    };
-
-    // Generate new token with appropriate expiration
-    return generateToken(newPayload, {
-      expiresIn: extendedSession ? REFRESH_TOKEN_EXPIRATION : TOKEN_EXPIRATION
-    });
+    const decoded = (await verifyToken(oldToken)) as TokenPayload
+    const newToken = await generateToken(decoded)
+    return newToken
   } catch (error) {
-    throw new Error(`Token refresh failed: ${error.message}`);
+    if (error instanceof Error) {
+      throw new Error(error.message)
+    }
+    throw new Error(ErrorCode.UNAUTHORIZED)
   }
-};
+}
 
 /**
- * Invalidates token with comprehensive revocation tracking
- * @param {string} token - Token to revoke
- * @param {string} reason - Reason for revocation
- * @returns {boolean} Revocation success status
+ * Revoke a JWT token by adding it to blacklist
  */
-export const revokeToken = async (
-  token: string,
-  reason: string
-): Promise<boolean> => {
-  try {
-    // Verify token before revocation
-    const decoded = await verifyToken(token);
-
-    // Add token to revocation list with metadata
-    const revocationData = {
-      token: token,
-      userId: decoded.userId,
-      sessionId: decoded.sessionId,
-      reason: reason,
-      timestamp: Date.now(),
-      auditId: decoded.auditId
-    };
-
-    // Store revocation data (implementation depends on storage solution)
-    // TODO: Implement revocation storage
-
-    return true;
-  } catch (error) {
-    throw new Error(`Token revocation failed: ${error.message}`);
-  }
-};
+export async function revokeToken(token: string): Promise<void> {
+  // Implementation of token revocation logic
+  // This would typically involve adding the token to a blacklist in Redis
+}

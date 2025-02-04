@@ -34,6 +34,7 @@ interface IUserMethods {
   updateAuditTrail(event: AuditEvent): Promise<void>
   validatePermissions(requiredPermissions: string[]): Promise<boolean>
   encryptSensitiveData(): Promise<void>
+  decryptSensitiveData(): Promise<void>
 }
 
 /**
@@ -249,15 +250,17 @@ UserSchema.methods.validatePermissions = async function (
  * Instance method to encrypt sensitive data
  */
 UserSchema.methods.encryptSensitiveData = async function (): Promise<void> {
-  const key = crypto.randomBytes(encryptedFields.keyLength)
-  const iv = crypto.randomBytes(encryptedFields.ivLength)
+  const key = crypto.randomBytes(32) // 256 bits for AES-256
+  const iv = crypto.randomBytes(12) // 96 bits for GCM
 
   const encrypt = (text: string): string => {
-    const cipher = crypto.createCipheriv(encryptedFields.algorithm, key, iv)
+    const cipher = crypto.createCipheriv("aes-256-gcm", key, iv)
     let encrypted = cipher.update(text, "utf8", "hex")
     encrypted += cipher.final("hex")
     const tag = cipher.getAuthTag()
-    return `${encrypted}:${tag.toString("hex")}:${iv.toString("hex")}`
+    return `${encrypted}:${tag.toString("hex")}:${iv.toString(
+      "hex"
+    )}:${key.toString("hex")}`
   }
 
   // Encrypt sensitive fields
@@ -268,6 +271,29 @@ UserSchema.methods.encryptSensitiveData = async function (): Promise<void> {
   }
 
   await this.save()
+}
+
+// Add decryption method
+UserSchema.methods.decryptSensitiveData = async function (): Promise<void> {
+  const decrypt = (encryptedData: string): string => {
+    const [encrypted, tag, iv, key] = encryptedData.split(":")
+    const decipher = crypto.createDecipheriv(
+      "aes-256-gcm",
+      Buffer.from(key, "hex"),
+      Buffer.from(iv, "hex")
+    )
+    decipher.setAuthTag(Buffer.from(tag, "hex"))
+    let decrypted = decipher.update(encrypted, "hex", "utf8")
+    decrypted += decipher.final("utf8")
+    return decrypted
+  }
+
+  // Decrypt sensitive fields
+  for (const field of Object.keys(this.profile)) {
+    if (this.schema.path(`profile.${field}`).options.encrypted) {
+      this.profile[field] = decrypt(this.profile[field])
+    }
+  }
 }
 
 // Create and export the model

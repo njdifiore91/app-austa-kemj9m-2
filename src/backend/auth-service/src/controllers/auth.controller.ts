@@ -9,8 +9,15 @@ import { injectable, inject } from "inversify"
 import { Controller, Post, Get } from "@decorators/express"
 import { Auth0Client } from "@auth0/auth0-spa-js" // v2.1.0
 import rateLimit from "express-rate-limit" // v6.9.0
-import { SecurityMetrics } from "../../shared/utils/security/security-metrics" // v1.0.0
-import { SessionManager } from "../../shared/utils/session/session-manager" // v1.0.0
+import { SecurityMetrics } from "../../../shared/utils/security/security-metrics" // v1.0.0
+import { SessionManager } from "../../../shared/utils/session/session-manager" // v1.0.0
+import {
+  hipaaCompliant,
+  securityAudit,
+  hipaaValidate,
+  auditLog,
+  middleware,
+} from "../decorators/hipaa.decorators"
 
 import AuthService from "../services/auth.service"
 import { ErrorCode, ErrorMessage } from "../../../shared/constants/error-codes"
@@ -40,8 +47,8 @@ const REGISTRATION_LIMITER = rateLimit({
  */
 @injectable()
 @Controller("/auth")
-@hipaaCompliant
-@securityAudit
+@hipaaCompliant()
+@securityAudit()
 export class AuthController {
   private authService: AuthService
   private sessionManager: SessionManager
@@ -61,9 +68,9 @@ export class AuthController {
    * Handles secure user login with MFA support
    */
   @Post("/login")
-  @hipaaValidate
-  @rateLimit(LOGIN_LIMITER)
-  @auditLog
+  @hipaaValidate()
+  @middleware(LOGIN_LIMITER)
+  @auditLog()
   public async login(
     req: Request,
     res: Response,
@@ -72,7 +79,7 @@ export class AuthController {
     try {
       // Extract and validate login credentials
       const { email, password, mfaCode, deviceFingerprint } = req.body
-      const ipAddress = req.ip
+      const ipAddress = req.ip || ""
 
       // Validate request data
       if (!email || !password || !deviceFingerprint) {
@@ -91,22 +98,14 @@ export class AuthController {
       })
 
       // Create secure session
-      await this.sessionManager.createSession({
-        userId: loginResult.user.id,
+      await this.sessionManager.createSession(loginResult.user.id, {
         token: loginResult.token,
         fingerprint: loginResult.fingerprint,
         ipAddress,
       })
 
       // Track security metrics
-      await this.securityMetrics.trackEvent({
-        type: "LOGIN_SUCCESS",
-        userId: loginResult.user.id,
-        metadata: {
-          ipAddress,
-          deviceFingerprint,
-        },
-      })
+      await this.securityMetrics.recordAuthAttempt(true, ipAddress)
 
       // Set secure cookie with session token
       res.cookie("session", loginResult.token, {
@@ -126,13 +125,7 @@ export class AuthController {
         },
       })
     } catch (error) {
-      await this.securityMetrics.trackEvent({
-        type: "LOGIN_FAILURE",
-        metadata: {
-          error: error instanceof Error ? error.message : "Unknown error",
-          ipAddress: req.ip,
-        },
-      })
+      await this.securityMetrics.recordAuthAttempt(false, req.ip || "")
 
       if (
         error instanceof Error &&
@@ -152,9 +145,9 @@ export class AuthController {
    * Handles secure user registration with enhanced validation
    */
   @Post("/register")
-  @hipaaValidate
-  @rateLimit(REGISTRATION_LIMITER)
-  @auditLog
+  @hipaaValidate()
+  @middleware(REGISTRATION_LIMITER)
+  @auditLog()
   public async register(
     req: Request,
     res: Response,
@@ -214,8 +207,8 @@ export class AuthController {
    * Handles secure token refresh with fingerprint validation
    */
   @Post("/refresh-token")
-  @hipaaValidate
-  @auditLog
+  @hipaaValidate()
+  @auditLog()
   public async refreshToken(
     req: Request,
     res: Response,
@@ -252,8 +245,8 @@ export class AuthController {
    * Handles secure logout with session termination
    */
   @Post("/logout")
-  @hipaaValidate
-  @auditLog
+  @hipaaValidate()
+  @auditLog()
   public async logout(
     req: Request,
     res: Response,
@@ -283,7 +276,9 @@ export class AuthController {
   }
 
   @Get("/verify")
-  async verifyToken(
+  @hipaaValidate()
+  @auditLog()
+  public async verifyToken(
     req: Request,
     res: Response,
     next: NextFunction

@@ -4,13 +4,17 @@
  * @version 1.0.0
  */
 
+import * as dotenv from "dotenv"
+// Load environment variables before other imports
+dotenv.config()
+
 import "reflect-metadata"
 import express, { Express, Request, Response, NextFunction } from "express" // v4.18.2
 import helmet from "helmet" // v7.0.0
 import cors from "cors" // v2.8.5
 import session from "express-session" // v1.17.3
-import { createClient, RedisClientType } from "redis" // v4.6.7
-import RedisStore from "connect-redis" // v7.1.0
+import { createClient } from "redis"
+import Redis from "ioredis"
 import rateLimit from "express-rate-limit" // v6.9.0
 import winston from "winston" // v3.10.0
 import { AUTH_CONFIG } from "./config/auth.config"
@@ -24,29 +28,27 @@ import { Model } from "mongoose"
 import { Auth0Client } from "@auth0/auth0-spa-js"
 import User, { IUserDocument } from "./models/user.model"
 import { IUser } from "../../shared/interfaces/user.interface"
-import Redis from "ioredis"
 import { Container } from "inversify"
+import connectRedis from "connect-redis"
 
 // Initialize Express application
 const app: Express = express()
 const PORT: number = parseInt(process.env.PORT || "3001", 10)
 
 // Initialize Redis client
-const redisClient: RedisClientType = createClient({
-  url: process.env.REDIS_URL,
+const redisClient = new Redis({
+  host: process.env.REDIS_HOST || "localhost",
+  port: parseInt(process.env.REDIS_PORT || "6379", 10),
   password: AUTH_CONFIG.redis.auth.password,
-  socket: {
-    tls: AUTH_CONFIG.redis.tls.enabled,
-    rejectUnauthorized: true,
-  },
+  tls: AUTH_CONFIG.redis.tls.enabled ? {} : undefined,
 })
 
 // Create RedisStore instance
-const RedisStoreConstructor = RedisStore(session)
-const redisStore = new (RedisStoreConstructor as any)({
+const RedisStore = connectRedis(session)
+const redisStore = new (RedisStore as any)({
   client: redisClient,
   prefix: "session:",
-})
+}) as session.Store
 
 // Configure Winston logger with security considerations
 const logger: winston.Logger = winston.createLogger({

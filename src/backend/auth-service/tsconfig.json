@@ -4,18 +4,21 @@
     "module": "commonjs",
     "lib": ["es2018", "esnext.asynciterable"],
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "../../",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "baseUrl": "./src",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "baseUrl": "../../",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./src/*"],
+      "@shared/*": ["shared/*"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../shared/**/*"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

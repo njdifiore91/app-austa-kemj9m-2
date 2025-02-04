@@ -54,13 +54,44 @@ export class SessionManager {
 
   /**
    * Update session metadata
-   * @param sessionId Session ID
    * @param metadata New metadata
    */
-  async updateSessionMetadata(
-    sessionId: string,
-    metadata: Record<string, unknown>
-  ): Promise<void> {
-    await this.redisClient.hmset(sessionId, metadata)
+  async updateSession(metadata: Record<string, unknown>): Promise<void> {
+    const token = metadata.token as string
+    if (!token) {
+      throw new Error("Token is required for session update")
+    }
+    const sessionId = await this.getSessionIdFromToken(token)
+    if (sessionId) {
+      await this.redisClient.hmset(sessionId, metadata)
+    }
+  }
+
+  /**
+   * Terminate session by token
+   * @param token Session token
+   */
+  async terminateSession(token: string): Promise<void> {
+    const sessionId = await this.getSessionIdFromToken(token)
+    if (sessionId) {
+      await this.invalidateSession(sessionId)
+    }
+  }
+
+  /**
+   * Get session ID from token
+   * @param token Session token
+   */
+  private async getSessionIdFromToken(token: string): Promise<string | null> {
+    // Implementation would depend on how you store the token-to-session mapping
+    // This is a placeholder implementation
+    const sessions = await this.redisClient.keys("session:*")
+    for (const sessionId of sessions) {
+      const sessionToken = await this.redisClient.hget(sessionId, "token")
+      if (sessionToken === token) {
+        return sessionId
+      }
+    }
+    return null
   }
 }
