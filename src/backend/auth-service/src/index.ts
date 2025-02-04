@@ -29,7 +29,7 @@ import { Auth0Client } from "@auth0/auth0-spa-js"
 import User, { IUserDocument } from "./models/user.model"
 import { IUser } from "../../shared/interfaces/user.interface"
 import { Container } from "inversify"
-import connectRedis from "connect-redis"
+import * as connectRedis from "connect-redis"
 
 // Initialize Express application
 const app: Express = express()
@@ -43,12 +43,12 @@ const redisClient = new Redis({
   tls: AUTH_CONFIG.redis.tls.enabled ? {} : undefined,
 })
 
-// Create RedisStore instance
-const RedisStore = connectRedis(session)
-const redisStore = new (RedisStore as any)({
+// Import RedisStore
+const RedisStore = connectRedis.default(session)
+const redisStore = new RedisStore({
   client: redisClient,
   prefix: "session:",
-}) as session.Store
+})
 
 // Configure Winston logger with security considerations
 const logger: winston.Logger = winston.createLogger({
