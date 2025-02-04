@@ -85,14 +85,20 @@ export class EncryptionService {
         )
       }
 
+      const effectiveConfig = {
+        ...config,
+        isPhiPii: options.isPhiPii ?? config.isPhiPii,
+      }
+
       const encryptedData = await this.internalEncryptData(
         Buffer.from(fieldValue),
-        config.encryptionKeyId
+        effectiveConfig.encryptionKeyId
       )
 
       this.logger.info("Encryption operation completed", {
         operation: "encryptField",
-        keyId: config.encryptionKeyId,
+        keyId: effectiveConfig.encryptionKeyId,
+        isPhiPii: effectiveConfig.isPhiPii,
         duration: Date.now() - startTime,
         timestamp: new Date().toISOString(),
       })
@@ -195,8 +201,7 @@ export class EncryptionService {
 
 export async function encryptData(
   data: Buffer | string,
-  keyId: string,
-  config: FieldEncryptionConfig
+  keyId: string
 ): Promise<EncryptedData> {
   try {
     const iv = crypto.randomBytes(16)
@@ -223,8 +228,7 @@ export async function encryptData(
 
 export async function decryptData(
   encryptedData: EncryptedData,
-  keyId: string,
-  config: FieldEncryptionConfig
+  keyId: string
 ): Promise<Buffer> {
   try {
     const key = await getEncryptionKey(keyId)

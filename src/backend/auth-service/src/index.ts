@@ -27,6 +27,8 @@ import { Model } from "mongoose"
 import { Auth0Client } from "@auth0/auth0-spa-js"
 import User, { IUserDocument } from "./models/user.model"
 import { Container } from "inversify"
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const ConnectRedis = require("connect-redis")
 
 // Initialize Express application
 const app: Express = express()
@@ -41,8 +43,7 @@ const redisClient = new Redis({
 })
 
 // Initialize Redis store for sessions
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const RedisStore = require("connect-redis")(session)
+const RedisStore = ConnectRedis(session)
 const sessionStore = new RedisStore({
   client: redisClient,
   prefix: "session:",

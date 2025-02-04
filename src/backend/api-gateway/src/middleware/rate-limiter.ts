@@ -10,8 +10,6 @@ import { Cluster } from "ioredis"
 import { Request, Response, NextFunction } from "express"
 import CircuitBreaker from "circuit-breaker-js"
 import { createLogger, format, transports } from "winston"
-import { HttpStatus } from "../../../shared/constants/http-status"
-import { kongConfig } from "../config/kong.config"
 
 // Configure logging
 const logger = createLogger({
@@ -98,9 +96,25 @@ class RateLimiter {
       volumeThreshold: 10,
     }
 
-    this.redisBreaker = new CircuitBreaker(
-      breakerConfig
-    ) as CircuitBreakerInstance
+    const breaker = new CircuitBreaker(breakerConfig)
+    this.redisBreaker = {
+      run: async <T>(fn: () => Promise<T>): Promise<T> => {
+        return new Promise((resolve, reject) => {
+          breaker.run(
+            () => {
+              fn().then(
+                (result) => resolve(result),
+                (error) => reject(error)
+              )
+            },
+            () => {
+              // Circuit breaker callback - called when circuit state changes
+              logger.warn("Circuit breaker state changed")
+            }
+          )
+        })
+      },
+    }
 
     // Set up health check interval
     setInterval(() => this.healthCheck(), 30000)
@@ -252,54 +266,44 @@ class RateLimiter {
  * Creates rate limiter middleware instance
  */
 export default function createRateLimiter(config: RateLimiterConfig) {
-  const rateLimiter = new RateLimiter(config)
+  const limiter = new RateLimiter(config)
 
   // Handle graceful shutdown
   process.on("SIGTERM", async () => {
-    await rateLimiter.cleanup()
+    await limiter.cleanup()
   })
 
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const clientId = (req as any).user?.id || req.ip
+      const clientId = req.ip || req.socket.remoteAddress || "unknown"
       const userType =
-        (req as any).user?.type === "premium" ? "premium" : "standard"
+        req.headers["x-user-type"] === "premium" ? "premium" : "standard"
 
-      const result = await rateLimiter.checkLimit(clientId, userType)
-
-      // Set rate limit headers
-      res.set({
-        "X-RateLimit-Limit": result.total.toString(),
-        "X-RateLimit-Remaining": result.remaining.toString(),
-        "X-RateLimit-Reset": result.reset.toString(),
-      })
+      const result = await limiter.checkLimit(clientId, userType)
 
       if (result.limited) {
-        logger.warn("Rate limit exceeded", {
-          clientId,
-          userType,
-          path: req.path,
-          method: req.method,
-        })
-
-        return res.status(429).json({
-          error: "Too many requests",
-          retryAfter: result.reset - Math.floor(Date.now() / 1000),
-        })
+        res
+          .status(429) // 429 Too Many Requests
+          .header("X-RateLimit-Limit", result.total.toString())
+          .header("X-RateLimit-Remaining", result.remaining.toString())
+          .header("X-RateLimit-Reset", result.reset.toString())
+          .json({
+            error: "Too Many Requests",
+            message: "Rate limit exceeded",
+            retryAfter: result.reset - Math.floor(Date.now() / 1000),
+          })
+        return
       }
+
+      res
+        .header("X-RateLimit-Limit", result.total.toString())
+        .header("X-RateLimit-Remaining", result.remaining.toString())
+        .header("X-RateLimit-Reset", result.reset.toString())
 
       next()
     } catch (error) {
-      logger.error("Rate limiter error", { error })
-
-      if (config.fallbackStrategy === "PERMISSIVE") {
-        next()
-      } else {
-        res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
-          error: "Rate limiter error",
-          message: "Please try again later",
-        })
-      }
+      logger.error("Rate limiting error", { error })
+      next(error)
     }
   }
 }

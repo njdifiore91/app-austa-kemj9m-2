@@ -11,7 +11,6 @@ import { RateLimiterMemory } from "rate-limiter-flexible"
 import { EncryptionService } from "../../../shared/utils/encryption.utils"
 import { HttpStatus } from "../../../shared/constants/http-status"
 import { ErrorCode } from "../../../shared/constants/error-codes"
-import { Logger } from "../../../shared/middleware/logger"
 import winston from "winston"
 
 // Constants for security configuration

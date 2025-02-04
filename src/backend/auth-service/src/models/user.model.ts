@@ -12,8 +12,8 @@ import {
   UserRole,
   UserStatus,
 } from "../../../shared/interfaces/user.interface"
-import { validateUserData } from "../../../shared/utils/validation.utils"
-import { ErrorCode } from "../../../shared/constants/error-codes"
+// import { validateUserData } from "../../../shared/utils/validation.utils"
+// import { ErrorCode } from "../../../shared/constants/error-codes"
 
 /**
  * Interface for audit event tracking
@@ -50,12 +50,12 @@ export interface IUserDocument
 /**
  * Schema definition for sensitive PII data encryption
  */
-const encryptedFields = {
-  algorithm: "aes-256-gcm",
-  keyLength: 32,
-  ivLength: 16,
-  tagLength: 16,
-}
+// const encryptedFields = {
+//   algorithm: "aes-256-gcm",
+//   keyLength: 32,
+//   ivLength: 16,
+//   tagLength: 16,
+// }
 
 /**
  * HIPAA-compliant user schema with comprehensive security features

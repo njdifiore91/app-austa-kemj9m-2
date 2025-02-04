@@ -42,24 +42,37 @@ export class CorsConfig {
   constructor(environment: string) {
     const corsPlugin = kongConfig.plugins.cors.config
 
-    this.allowedOrigins = corsPlugin.origins
+    // Set allowed origins based on environment
+    this.allowedOrigins =
+      environment === "development"
+        ? [...corsPlugin.origins, "http://localhost:*", "https://localhost:*"]
+        : corsPlugin.origins
+
     this.allowedMethods = corsPlugin.methods
     this.allowedHeaders = corsPlugin.headers
     this.exposedHeaders = corsPlugin.exposed_headers
     this.maxAge = corsPlugin.max_age
     this.allowCredentials = corsPlugin.credentials
 
+    // Configure mobile app specific settings
     this.mobileConfig = {
-      protocols: ["capacitor://", "ionic://", "https://", "http://"],
+      protocols:
+        environment === "development" ? ["capacitor", "ionic"] : ["capacitor"],
     }
 
+    // Set security headers based on environment
     this.securityHeaders = {
       "Strict-Transport-Security":
-        "max-age=31536000; includeSubDomains; preload",
+        environment === "production"
+          ? "max-age=31536000; includeSubDomains; preload"
+          : "max-age=86400",
       "X-Frame-Options": "DENY",
       "X-Content-Type-Options": "nosniff",
       "X-XSS-Protection": "1; mode=block",
-      "Content-Security-Policy": "default-src 'self'",
+      "Content-Security-Policy":
+        environment === "production"
+          ? "default-src 'self'; frame-ancestors 'none'"
+          : "default-src 'self' 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'",
     }
   }
 
