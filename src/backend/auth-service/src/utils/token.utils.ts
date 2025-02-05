@@ -8,7 +8,7 @@
 import * as jwt from "jsonwebtoken"
 import * as crypto from "crypto"
 import { AUTH_CONFIG } from "../config/auth.config"
-import { ErrorCode } from "../../../shared/constants/error-codes"
+import { ErrorCode } from "@austa/shared/constants/error-codes"
 import { Secret, SignOptions } from "jsonwebtoken"
 
 /**

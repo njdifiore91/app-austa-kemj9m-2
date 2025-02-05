@@ -23,6 +23,7 @@
     "security:audit": "npm audit --audit-level=high"
   },
   "dependencies": {
+    "@austa/shared": "1.0.0",
     "@elastic/elasticsearch": "^8.0.0",
     "compression": "^1.7.4",
     "cors": "^2.8.5",

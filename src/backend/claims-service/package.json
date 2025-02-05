@@ -14,10 +14,10 @@
     "security-scan": "snyk test && npm audit",
     "security-audit": "npm audit && snyk monitor",
     "lint": "eslint . --ext .ts --max-warnings 0",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "prepare": "husky install"
+    "format": "prettier --write \"src/**/*.ts\""
   },
   "dependencies": {
+    "@austa/shared": "1.0.0",
     "express": "^4.18.2",
     "mongoose": "^7.0.0",
     "helmet": "^7.0.0",
@@ -37,7 +37,6 @@
     "joi": "^17.9.0",
     "jsonwebtoken": "^9.0.2",
     "bcrypt": "^5.1.0",
-    "@austa/shared": "^1.0.0",
     "crypto-js": "^4.1.1"
   },
   "devDependencies": {
@@ -49,8 +48,6 @@
     "ts-jest": "^29.1.1",
     "eslint": "^8.48.0",
     "prettier": "^3.0.3",
-    "husky": "^8.0.3",
-    "lint-staged": "^14.0.1",
     "supertest": "^6.3.3",
     "sinon": "^15.0.0",
     "@faker-js/faker": "^8.0.0",
@@ -76,12 +73,6 @@
     "collectCoverageFrom": [
       "src/**/*.ts",
       "!src/types/**/*.ts"
-    ]
-  },
-  "lint-staged": {
-    "*.ts": [
-      "eslint --fix",
-      "prettier --write"
     ]
   }
 }

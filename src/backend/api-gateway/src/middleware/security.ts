@@ -4,13 +4,14 @@
  */
 
 import { Request, Response, NextFunction } from "express"
+import { Socket } from "net"
 import helmet from "helmet"
 import hpp from "hpp"
 import cors from "cors"
 import { RateLimiterMemory } from "rate-limiter-flexible"
-import { EncryptionService } from "../../../shared/utils/encryption.utils"
-import { HttpStatus } from "../../../shared/constants/http-status"
-import { ErrorCode } from "../../../shared/constants/error-codes"
+import { EncryptionService } from "@austa/shared/utils/encryption.utils"
+import { HttpStatus } from "@austa/shared/constants/http-status"
+import { ErrorCode } from "@austa/shared/constants/error-codes"
 import winston from "winston"
 
 // Constants for security configuration
@@ -41,6 +42,17 @@ const logger = winston.createLogger({
 })
 
 const rateLimiter = new RateLimiterMemory(RATE_LIMIT_CONFIG)
+
+interface TLSSocket extends Socket {
+  encrypted?: boolean
+  getCipher?: () => {
+    version: string
+  } | null
+}
+
+interface SecureRequest extends Omit<Request, 'socket'> {
+  socket: TLSSocket
+}
 
 /**
  * Enhanced security middleware implementing HIPAA and LGPD compliant security measures
@@ -79,12 +91,12 @@ export default async function securityMiddleware(
         xssFilter: true,
         noSniff: true,
         referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-      })(req, res, () => resolve())
+      })(req as Request, res, () => resolve())
     })
 
     // Apply HTTP Parameter Pollution protection
     await new Promise<void>((resolve) => {
-      hpp()(req, res, () => resolve())
+      hpp()(req as Request, res, () => resolve())
     })
 
     // Configure strict CORS
@@ -96,7 +108,7 @@ export default async function securityMiddleware(
         exposedHeaders: ["X-Request-ID"],
         credentials: true,
         maxAge: 600,
-      })(req, res, () => resolve())
+      })(req as Request, res, () => resolve())
     })
 
     // Rate limiting check
@@ -113,7 +125,7 @@ export default async function securityMiddleware(
     }
 
     // Validate TLS version
-    if (!validateTLS(req)) {
+    if (!validateTLS(req as SecureRequest)) {
       logger.error("Invalid TLS version", {
         version: req.protocol,
         required: REQUIRED_TLS_VERSION,
@@ -179,18 +191,11 @@ export default async function securityMiddleware(
   }
 }
 
-interface TLSSocket {
-  encrypted?: boolean
-  getCipher?: () => {
-    version: string
-  } | null
-}
-
 /**
  * Validates TLS version and certificate
  */
-function validateTLS(req: Request): boolean {
-  const tlsSocket = req.socket as TLSSocket
+function validateTLS(req: SecureRequest): boolean {
+  const tlsSocket = req.socket
   if (!tlsSocket?.encrypted || !tlsSocket?.getCipher) {
     return false
   }

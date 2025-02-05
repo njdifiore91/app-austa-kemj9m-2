@@ -9,8 +9,8 @@ import { injectable, inject } from "inversify"
 import { Controller, Post, Get } from "@decorators/express"
 // import { Auth0Client } from "@auth0/auth0-spa-js" // v2.1.0
 import rateLimit from "express-rate-limit" // v6.9.0
-import { SecurityMetrics } from "../../../shared/utils/security/security-metrics" // v1.0.0
-import { SessionManager } from "../../../shared/utils/session/session-manager" // v1.0.0
+import { SecurityMetrics } from "@austa/shared/utils/security/security-metrics"
+import { SessionManager } from "@austa/shared/utils/session/session-manager"
 import {
   hipaaCompliant,
   securityAudit,
@@ -20,10 +20,19 @@ import {
 } from "../decorators/hipaa.decorators"
 
 import AuthService from "../services/auth.service"
-import { ErrorCode, ErrorMessage } from "../../../shared/constants/error-codes"
-import { HttpStatus } from "../../../shared/constants/http-status"
-import { validateUserData } from "../../../shared/utils/validation.utils"
-import { IUser } from "../../../shared/interfaces/user.interface"
+import { ErrorCode, ErrorMessage } from "@austa/shared/constants/error-codes"
+import { HttpStatus } from "@austa/shared/constants/http-status"
+import { validateUserData } from "@austa/shared/utils/validation.utils"
+import { IUser } from "@austa/shared/interfaces/user.interface"
+
+// Extend Request type to include user property
+interface AuthenticatedRequest extends Request {
+  user?: {
+    id: string
+    email: string
+    role: string
+  }
+}
 
 // Rate limiting configurations
 const LOGIN_LIMITER = rateLimit({
@@ -72,7 +81,7 @@ export class AuthController {
   @middleware(LOGIN_LIMITER)
   @auditLog()
   public async login(
-    req: Request,
+    req: AuthenticatedRequest,
     res: Response,
     next: NextFunction
   ): Promise<Response | void> {
@@ -149,7 +158,7 @@ export class AuthController {
   @middleware(REGISTRATION_LIMITER)
   @auditLog()
   public async register(
-    req: Request,
+    req: AuthenticatedRequest,
     res: Response,
     next: NextFunction
   ): Promise<Response | void> {
@@ -210,7 +219,7 @@ export class AuthController {
   @hipaaValidate()
   @auditLog()
   public async refreshToken(
-    req: Request,
+    req: AuthenticatedRequest,
     res: Response,
     next: NextFunction
   ): Promise<Response | void> {
@@ -248,7 +257,7 @@ export class AuthController {
   @hipaaValidate()
   @auditLog()
   public async logout(
-    req: Request,
+    req: AuthenticatedRequest,
     res: Response,
     next: NextFunction
   ): Promise<Response | void> {
@@ -279,7 +288,7 @@ export class AuthController {
   @hipaaValidate()
   @auditLog()
   public async verifyToken(
-    req: Request,
+    req: AuthenticatedRequest,
     res: Response,
     next: NextFunction
   ): Promise<Response | void> {

@@ -17,6 +17,7 @@
     "docker:run": "docker run -p 3000:3000 austa-api-gateway"
   },
   "dependencies": {
+    "@austa/shared": "1.0.0",
     "cache-manager": "^5.2.0",
     "compression": "^1.7.4",
     "connect-redis": "^7.1.0",
