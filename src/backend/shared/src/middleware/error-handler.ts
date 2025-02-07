@@ -3,10 +3,25 @@
  * @version 1.0.0
  */
 
-import { Request, Response, NextFunction } from 'express'; // v4.18.2
+import { Request, Response, NextFunction } from 'express';
 import { ErrorCode, ErrorCategory, ErrorMessage, ErrorSeverity } from '../constants/error-codes';
-import { HttpStatus, isClientErrorStatus, isServerErrorStatus } from '../constants/http-status';
-import { globalLogger as Logger } from './logger';
+import { HttpStatus } from '../constants/http-status';
+import { globalLogger } from './logger';
+import * as crypto from 'crypto';
+import { Session } from 'express-session';
+
+// Extend SessionData to include our custom properties
+declare module 'express-session' {
+  interface SessionData {
+    id?: string;
+  }
+}
+
+// Extended Request interface with custom properties
+interface ExtendedRequest extends Request {
+  user?: { id: string };
+  id?: string;
+}
 
 // PII/PHI detection patterns for error message sanitization
 const SENSITIVE_DATA_PATTERNS = {
@@ -129,13 +144,54 @@ function formatErrorResponse(error: AppError): any {
 }
 
 /**
+ * Utility function to create standardized application errors
+ */
+export function createAppError(
+  code: ErrorCode,
+  details?: any,
+  securityContext?: any,
+  complianceMetadata?: any
+): AppError {
+  const errorDef = ErrorMessage[code];
+  let statusCode: number;
+
+  // Determine appropriate HTTP status code based on error category
+  switch (errorDef.category) {
+    case ErrorCategory.AUTHENTICATION:
+      statusCode = HttpStatus.UNAUTHORIZED;
+      break;
+    case ErrorCategory.AUTHORIZATION:
+      statusCode = HttpStatus.FORBIDDEN;
+      break;
+    case ErrorCategory.BUSINESS_LOGIC:
+      statusCode = HttpStatus.BAD_REQUEST;
+      break;
+    case ErrorCategory.SECURITY:
+    case ErrorCategory.COMPLIANCE:
+      statusCode = HttpStatus.FORBIDDEN;
+      break;
+    default:
+      statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+  }
+
+  return new AppError(
+    errorDef.message,
+    code,
+    statusCode,
+    details,
+    securityContext,
+    complianceMetadata
+  );
+}
+
+/**
  * Global error handling middleware with enhanced security and monitoring
  */
 export const errorHandler = (
   error: Error | AppError,
-  req: Request,
+  req: ExtendedRequest,
   res: Response,
-  next: NextFunction
+  _next: NextFunction // Prefix with underscore to indicate it's unused
 ): void => {
   // Initialize error tracking context
   const securityContext = {
@@ -157,7 +213,7 @@ export const errorHandler = (
       );
 
   // Enhanced error logging with security context
-  Logger.log('error', appError.message, {
+  globalLogger.error(appError.message, {
     errorId: appError.auditTrail.errorId,
     code: appError.code,
     stack: appError.stack,
@@ -169,7 +225,7 @@ export const errorHandler = (
 
   // Compliance audit logging if required
   if (appError.complianceMetadata.auditRequired) {
-    Logger.log('audit', 'Security relevant error occurred', {
+    globalLogger.warn('Security relevant error occurred', {
       errorId: appError.auditTrail.errorId,
       code: appError.code,
       securityContext: appError.securityContext,
@@ -180,25 +236,3 @@ export const errorHandler = (
   // Format and send secure error response
   res.status(appError.statusCode).json(formatErrorResponse(appError));
 };
-
-/**
- * Utility function to create standardized application errors
- */
-export function createAppError(
-  code: ErrorCode,
-  details?: any,
-  securityContext?: any,
-  complianceMetadata?: any
-): AppError {
-  const errorDef = ErrorMessage[code];
-  const statusCode = isClientErrorStatus(HttpStatus.BAD_REQUEST) ? HttpStatus.BAD_REQUEST : HttpStatus.INTERNAL_SERVER_ERROR;
-
-  return new AppError(
-    errorDef.message,
-    code,
-    statusCode,
-    details,
-    securityContext,
-    complianceMetadata
-  );
-}

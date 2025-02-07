@@ -4,23 +4,27 @@
  * @version 1.0.0
  */
 
-import { Request, Response, NextFunction } from 'express'; // v4.18.2
-import { Auth0Provider } from '@auth0/auth0-spa-js'; // v2.1.0
-import rateLimit from 'express-rate-limit'; // v6.9.0
-import { SecurityMetrics } from '@austa/security-metrics'; // v1.0.0
-import { SessionManager } from '@austa/session-manager'; // v1.0.0
-
+import { Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
+import { createClient, RedisClientType } from 'redis';
+import User from '../models/user.model';
 import AuthService from '../services/auth.service';
-import { ErrorCode, ErrorMessage } from '../../../shared/constants/error-codes';
-import { HttpStatus } from '../../../shared/constants/http-status';
-import { validateUserData } from '../../../shared/utils/validation.utils';
-import { IUser } from '../../../shared/interfaces/user.interface';
+import { ErrorCode } from '@shared/constants/error-codes';
+import { ErrorMessage } from '@shared/constants/error-codes';
+import { HttpStatus } from '@shared/constants/http-status';
+import { UserRole, UserStatus, IUser } from '@shared/interfaces/user.interface';
+import winston from 'winston';
+import { controller, hipaaCompliant, securityAudit, post, hipaaValidate, auditLog, rateLimit as rateLimitDecorator } from '../decorators';
+import crypto from 'crypto';
+import { Auth0Client } from '@auth0/auth0-spa-js';
+import { AUTH_CONFIG } from '../config/auth.config';
+import { getRedisClient } from '../utils/redis.utils';
 
 // Rate limiting configurations
 const LOGIN_LIMITER = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 5, // 5 requests per minute
-  message: ErrorMessage[ErrorCode.RATE_LIMIT_EXCEEDED].message,
+  message: 'Too many login attempts, please try again later',
   standardHeaders: true,
   legacyHeaders: false
 });
@@ -28,51 +32,94 @@ const LOGIN_LIMITER = rateLimit({
 const REGISTRATION_LIMITER = rateLimit({
   windowMs: 60 * 1000,
   max: 3,
-  message: ErrorMessage[ErrorCode.RATE_LIMIT_EXCEEDED].message,
+  message: 'Too many registration attempts, please try again later',
   standardHeaders: true,
   legacyHeaders: false
 });
 
 /**
- * HIPAA-compliant authentication controller with comprehensive security features
+ * Authentication controller with security features
  */
 @controller('/auth')
-@hipaaCompliant
-@securityAudit
+@hipaaCompliant()
+@securityAudit()
 export class AuthController {
-  private authService: AuthService;
-  private sessionManager: SessionManager;
-  private securityMetrics: SecurityMetrics;
+  private authService!: AuthService;
+  private logger: winston.Logger;
 
-  constructor(
-    authService: AuthService,
-    sessionManager: SessionManager,
-    securityMetrics: SecurityMetrics
-  ) {
-    this.authService = authService;
-    this.sessionManager = sessionManager;
-    this.securityMetrics = securityMetrics;
+  constructor() {
+    this.logger = winston.createLogger({
+      level: 'info',
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json()
+      ),
+      defaultMeta: { service: 'auth-service' },
+      transports: [
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.colorize(),
+            winston.format.simple()
+          )
+        })
+      ]
+    });
+
+    this.logger.info('Initializing AuthController...');
+
+    // Initialize Auth0 client
+    this.logger.info('Initializing Auth0 client...');
+    const auth0Client = new Auth0Client({
+      domain: process.env.AUTH0_DOMAIN || 'your-domain.auth0.com',
+      clientId: process.env.OAUTH_CLIENT_ID || 'dummy-client-id'
+    });
+
+    // Initialize security metrics
+    this.logger.info('Setting up security metrics...');
+    const securityMetrics = {
+      trackEvent: async (userId: string, event: string) => {
+        this.logger.info('Security event tracked', { userId, event });
+      }
+    };
+
+    // Initialize auth service
+    this.logger.info('Initializing AuthService...');
+    getRedisClient().then((redisClient: RedisClientType) => {
+      this.authService = new AuthService(User, redisClient, auth0Client, securityMetrics);
+    }).catch((error: Error) => {
+      this.logger.error('Failed to initialize AuthService:', error);
+      throw error;
+    });
+
+    // Bind methods to this instance
+    this.logger.info('Binding controller methods...');
+    this.login = this.login.bind(this);
+    this.register = this.register.bind(this);
+    this.refreshToken = this.refreshToken.bind(this);
+    this.logout = this.logout.bind(this);
+
+    this.logger.info('AuthController initialization complete');
   }
 
   /**
-   * Handles secure user login with MFA support
+   * Handles user login
    */
   @post('/login')
-  @hipaaValidate
-  @rateLimit(LOGIN_LIMITER)
-  @auditLog
+  @hipaaValidate()
+  @rateLimitDecorator(LOGIN_LIMITER)
+  @auditLog()
   public async login(
     req: Request,
     res: Response,
     next: NextFunction
   ): Promise<Response> {
     try {
-      // Extract and validate login credentials
-      const { email, password, mfaCode, deviceFingerprint } = req.body;
-      const ipAddress = req.ip;
+      const { email, password, mfaCode } = req.body;
+      const ipAddress = req.ip || '';
+      const deviceFingerprint = req.headers['x-device-fingerprint'] as string || crypto.randomUUID();
 
       // Validate request data
-      if (!email || !password || !deviceFingerprint) {
+      if (!email || !password) {
         return res.status(HttpStatus.BAD_REQUEST).json({
           error: ErrorMessage[ErrorCode.INVALID_INPUT].message
         });
@@ -87,30 +134,10 @@ export class AuthController {
         ipAddress
       });
 
-      // Create secure session
-      await this.sessionManager.createSession({
+      // Log successful login
+      this.logger.info('User logged in successfully', {
         userId: loginResult.user.id,
-        token: loginResult.token,
-        fingerprint: loginResult.fingerprint,
         ipAddress
-      });
-
-      // Track security metrics
-      await this.securityMetrics.trackEvent({
-        type: 'LOGIN_SUCCESS',
-        userId: loginResult.user.id,
-        metadata: {
-          ipAddress,
-          deviceFingerprint
-        }
-      });
-
-      // Set secure cookie with session token
-      res.cookie('session', loginResult.token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'strict',
-        maxAge: 900000 // 15 minutes
       });
 
       return res.status(HttpStatus.OK).json({
@@ -123,152 +150,233 @@ export class AuthController {
         }
       });
     } catch (error) {
-      await this.securityMetrics.trackEvent({
-        type: 'LOGIN_FAILURE',
-        metadata: {
-          error: error.message,
-          ipAddress: req.ip
-        }
+      this.logger.error('Login failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        ipAddress: req.ip
       });
 
-      if (error.message === ErrorCode.INVALID_CREDENTIALS) {
+      if (error instanceof Error && error.message === ErrorCode.INVALID_CREDENTIALS) {
         return res.status(HttpStatus.UNAUTHORIZED).json({
           error: ErrorMessage[ErrorCode.INVALID_CREDENTIALS].message
         });
       }
 
-      next(error);
+      throw error;
     }
   }
 
   /**
-   * Handles secure user registration with enhanced validation
+   * Handles user registration with comprehensive validation
    */
   @post('/register')
-  @hipaaValidate
-  @rateLimit(REGISTRATION_LIMITER)
-  @auditLog
-  public async register(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ): Promise<Response> {
+  @hipaaValidate()
+  @rateLimitDecorator(REGISTRATION_LIMITER)
+  @auditLog()
+  public async register(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const userData: IUser = req.body;
-
-      // Validate user data
-      const validationResult = await validateUserData(userData, {
-        validatePassword: true,
-        checkMFA: true
+      console.log('🔍 [AuthController] Register endpoint hit:', {
+        body: {
+          ...req.body,
+          password: '[REDACTED]'
+        },
+        headers: req.headers,
+        path: req.path,
+        method: req.method
       });
 
-      if (!validationResult.isValid) {
-        return res.status(HttpStatus.BAD_REQUEST).json({
-          error: ErrorMessage[ErrorCode.INVALID_INPUT].message,
-          details: validationResult.errors
+      // Validate request body
+      if (!req.body) {
+        res.status(HttpStatus.BAD_REQUEST).json({
+          code: ErrorCode.INVALID_INPUT,
+          message: ErrorMessage[ErrorCode.INVALID_INPUT].message
         });
+        return;
       }
 
-      // Register user
-      const registrationResult = await this.authService.register(userData);
+      console.log('✅ [AuthController] Register validation passed, proceeding with registration');
 
-      // Track registration metrics
-      await this.securityMetrics.trackEvent({
-        type: 'USER_REGISTERED',
-        userId: registrationResult.user.id,
-        metadata: {
-          ipAddress: req.ip
-        }
-      });
+      const result = await this.authService.register(req.body);
 
-      return res.status(HttpStatus.CREATED).json({
-        token: registrationResult.token,
-        fingerprint: registrationResult.fingerprint,
-        user: {
-          id: registrationResult.user.id,
-          email: registrationResult.user.email,
-          role: registrationResult.user.role
-        }
-      });
+      res.status(HttpStatus.CREATED).json(result);
     } catch (error) {
-      await this.securityMetrics.trackEvent({
-        type: 'REGISTRATION_FAILURE',
-        metadata: {
-          error: error.message,
-          ipAddress: req.ip
-        }
+      console.error('❌ [AuthController] Registration failed:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        ipAddress: req.ip
       });
-      next(error);
+
+      // Handle mongoose validation errors
+      if (error instanceof Error && error.name === 'ValidationError') {
+        res.status(HttpStatus.BAD_REQUEST).json({
+          code: ErrorCode.DATA_VALIDATION_ERROR,
+          message: error.message,
+          details: error
+        });
+        return;
+      }
+
+      // Handle MongoDB duplicate key errors
+      if (error instanceof Error && error.message.includes('E11000 duplicate key error')) {
+        const field = error.message.includes('email_1') ? 'email' : 'unknown field';
+        res.status(HttpStatus.CONFLICT).json({
+          code: ErrorCode.DUPLICATE_ENTRY,
+          message: `A user with this ${field} already exists`,
+          details: {
+            field,
+            error: 'DUPLICATE_ENTRY'
+          }
+        });
+        return;
+      }
+
+      // Handle token generation errors
+      if (error instanceof Error && error.message === ErrorCode.TOKEN_GENERATION_FAILED) {
+        res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+          code: ErrorCode.TOKEN_GENERATION_FAILED,
+          message: 'Failed to complete registration due to a security error. Please try again.',
+          details: {
+            error: 'TOKEN_GENERATION_FAILED'
+          }
+        });
+        return;
+      }
+
+      // Handle other known errors
+      if (error instanceof Error && Object.values(ErrorCode).includes(error.message as ErrorCode)) {
+        const errorCode = error.message as ErrorCode;
+        res.status(HttpStatus.BAD_REQUEST).json({
+          code: errorCode,
+          message: ErrorMessage[errorCode].message
+        });
+        return;
+      }
+
+      // Handle unknown errors
+      res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+        code: ErrorCode.INTERNAL_SERVER_ERROR,
+        message: ErrorMessage[ErrorCode.INTERNAL_SERVER_ERROR].message
+      });
     }
   }
 
   /**
-   * Handles secure token refresh with fingerprint validation
+   * Handles account verification
    */
-  @post('/refresh-token')
-  @hipaaValidate
-  @auditLog
-  public async refreshToken(
+  @post('/verify-account')
+  @hipaaValidate()
+  @auditLog()
+  public async verifyAccount(
     req: Request,
     res: Response,
     next: NextFunction
   ): Promise<Response> {
     try {
-      const { token } = req.body;
+      const { userId, token } = req.body;
 
-      if (!token) {
+      if (!userId || !token) {
         return res.status(HttpStatus.BAD_REQUEST).json({
-          error: ErrorMessage[ErrorCode.INVALID_INPUT].message
+          code: ErrorCode.INVALID_INPUT,
+          message: 'User ID and token are required'
         });
       }
 
-      const refreshResult = await this.authService.refreshToken(token);
-
-      // Update session with new token
-      await this.sessionManager.updateSession({
-        token: refreshResult.token,
-        fingerprint: refreshResult.fingerprint
-      });
+      await this.authService.verifyAccount(userId, token);
 
       return res.status(HttpStatus.OK).json({
-        token: refreshResult.token,
-        fingerprint: refreshResult.fingerprint
+        message: 'Account verified successfully'
       });
     } catch (error) {
-      next(error);
+      this.logger.error('Account verification failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        ipAddress: req.ip
+      });
+
+      if (error instanceof Error && error.message === ErrorCode.INVALID_VERIFICATION_TOKEN) {
+        return res.status(HttpStatus.BAD_REQUEST).json({
+          code: ErrorCode.INVALID_VERIFICATION_TOKEN,
+          message: ErrorMessage[ErrorCode.INVALID_VERIFICATION_TOKEN].message
+        });
+      }
+
+      if (error instanceof Error && error.message === ErrorCode.USER_NOT_FOUND) {
+        return res.status(HttpStatus.NOT_FOUND).json({
+          code: ErrorCode.USER_NOT_FOUND,
+          message: ErrorMessage[ErrorCode.USER_NOT_FOUND].message
+        });
+      }
+
+      throw error;
     }
   }
 
   /**
-   * Handles secure logout with session termination
+   * Handles user logout
    */
   @post('/logout')
-  @hipaaValidate
-  @auditLog
+  @hipaaValidate()
+  @auditLog()
   public async logout(
     req: Request,
     res: Response,
     next: NextFunction
   ): Promise<Response> {
     try {
-      const { token } = req.body;
-
+      const token = req.headers.authorization?.split(' ')[1];
       if (!token) {
+        return res.status(HttpStatus.BAD_REQUEST).json({
+          error: 'No token provided'
+        });
+      }
+
+      await this.authService.logout(token);
+
+      return res.status(HttpStatus.OK).json({
+        message: 'Logged out successfully'
+      });
+    } catch (error) {
+      this.logger.error('Logout failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        ipAddress: req.ip
+      });
+
+      throw error;
+    }
+  }
+
+  /**
+   * Handles token refresh with security validation
+   */
+  @post('/refresh-token')
+  @hipaaValidate()
+  @auditLog()
+  public async refreshToken(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<Response> {
+    try {
+      const { refreshToken } = req.body;
+
+      if (!refreshToken) {
         return res.status(HttpStatus.BAD_REQUEST).json({
           error: ErrorMessage[ErrorCode.INVALID_INPUT].message
         });
       }
 
-      // Logout and invalidate session
-      await this.authService.logout(token);
-      await this.sessionManager.terminateSession(token);
+      // Validate and refresh token
+      const refreshResult = await this.authService.refreshToken(refreshToken);
 
-      // Clear session cookie
-      res.clearCookie('session');
-
-      return res.status(HttpStatus.NO_CONTENT).send();
+      return res.status(HttpStatus.OK).json({
+        token: refreshResult.token,
+        fingerprint: refreshResult.fingerprint
+      });
     } catch (error) {
-      next(error);
+      this.logger.error('Token refresh failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        ipAddress: req.ip
+      });
+
+      throw error;
     }
   }
 }

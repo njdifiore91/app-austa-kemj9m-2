@@ -6,12 +6,18 @@
  * @version 1.0.0
  */
 
-import Redis from 'ioredis'; // v5.3.2
+import express from 'express';
+import rateLimit from 'express-rate-limit';
+import RedisStore from 'rate-limit-redis';
+import * as Redis from 'ioredis';
+const CircuitBreaker = require('opossum');
 import { Request, Response, NextFunction } from 'express'; // v4.18.2
-import CircuitBreaker from 'circuit-breaker-js'; // v0.0.3
 import { createLogger, format, transports } from 'winston'; // v3.8.2
-import { HttpStatus } from '../../../shared/constants/http-status';
+import { HttpStatus } from '@shared/constants/http-status';
 import { kongConfig } from '../config/kong.config';
+
+// Add type declaration for opossum
+declare module 'opossum';
 
 // Configure logging
 const logger = createLogger({
@@ -29,12 +35,8 @@ type UserType = 'standard' | 'premium';
 
 interface RateLimiterConfig {
   redis: {
-    nodes: Array<{ host: string; port: number }>;
-    options: {
-      clusterRetryStrategy: (times: number) => number;
-      enableReadyCheck: boolean;
-      maxRedirections: number;
-    };
+    nodes: { host: string; port: number }[];
+    options: Redis.ClusterOptions;
   };
   limits: {
     standard: number;
@@ -61,118 +63,154 @@ interface SlidingWindow {
   timestamp: number;
 }
 
+// Extend Request type to include user property
+interface AuthenticatedRequest extends Request {
+  user?: {
+    id: string;
+    type: 'standard' | 'premium';
+  };
+}
+
 /**
  * Rate Limiter class implementing sliding window algorithm with Redis cluster support
  */
 class RateLimiter {
-  private redisCluster: Redis.Cluster;
+  private redisCluster!: Redis.Cluster;  // Using definite assignment assertion
   private redisBreaker: any;
   private config: RateLimiterConfig;
   private localCounters: Map<string, SlidingWindow>;
+  private isRedisAvailable: boolean = true;
 
   constructor(config: RateLimiterConfig) {
     this.config = config;
     this.localCounters = new Map();
 
-    // Initialize Redis cluster
-    this.redisCluster = new Redis.Cluster(config.redis.nodes, {
-      ...config.redis.options,
-      clusterRetryStrategy: (times) => {
-        return Math.min(times * 100, 3000);
-      }
-    });
-
-    // Initialize circuit breaker
-    this.redisBreaker = new CircuitBreaker({
-      windowDuration: config.circuitBreaker.timeout,
-      numBuckets: 10,
-      timeoutDuration: config.circuitBreaker.resetTimeout,
-      errorThreshold: config.circuitBreaker.errorThreshold,
-      volumeThreshold: 10
-    });
-
-    // Set up health check interval
-    setInterval(() => this.healthCheck(), 30000);
-  }
-
-  /**
-   * Checks rate limit for a client using sliding window algorithm
-   */
-  private async checkLimit(clientId: string, userType: UserType): Promise<RateLimitResult> {
-    const now = Date.now();
-    const windowStart = now - this.config.windowMs;
-    const limit = userType === 'premium' ? this.config.limits.premium : this.config.limits.standard;
-
+    // Initialize Redis cluster with better error handling
     try {
-      return await this.redisBreaker.run(async () => {
-        const key = `ratelimit:${clientId}:${Math.floor(now / this.config.windowMs)}`;
-        const prevKey = `ratelimit:${clientId}:${Math.floor(windowStart / this.config.windowMs)}`;
-
-        const multi = this.redisCluster.multi();
-        multi.get(key);
-        multi.get(prevKey);
-        const [current, previous] = await multi.exec();
-
-        const currentCount = parseInt(current?.[1] as string || '0');
-        const previousCount = parseInt(previous?.[1] as string || '0');
-
-        const weightedPrevious = previousCount * ((this.config.windowMs - (now % this.config.windowMs)) / this.config.windowMs);
-        const count = Math.floor(weightedPrevious + currentCount);
-
-        if (count >= limit) {
-          return {
-            limited: true,
-            remaining: 0,
-            reset: Math.ceil((now + this.config.windowMs) / 1000),
-            total: limit
-          };
+      this.redisCluster = new Redis.Cluster(config.redis.nodes, {
+        ...config.redis.options,
+        clusterRetryStrategy: (times) => {
+          const delay = Math.min(times * 100, 3000);
+          logger.warn(`Redis cluster retry attempt ${times}, waiting ${delay}ms`);
+          return delay;
         }
+      });
 
-        await this.redisCluster.incr(key);
-        await this.redisCluster.expire(key, Math.ceil(this.config.windowMs / 1000));
+      this.redisCluster.on('error', (err) => {
+        logger.error('Redis cluster error:', err);
+        this.isRedisAvailable = false;
+      });
 
-        return {
-          limited: false,
-          remaining: limit - count - 1,
-          reset: Math.ceil((now + this.config.windowMs) / 1000),
-          total: limit
-        };
+      this.redisCluster.on('ready', () => {
+        logger.info('Redis cluster is ready');
+        this.isRedisAvailable = true;
+      });
+
+      this.redisCluster.on('connect', () => {
+        logger.info('Redis cluster is connecting');
+      });
+
+      this.redisCluster.on('reconnecting', () => {
+        logger.warn('Redis cluster is reconnecting');
+        this.isRedisAvailable = false;
       });
     } catch (error) {
-      logger.warn('Redis operation failed, falling back to local counter', { clientId, error });
+      logger.error('Failed to initialize Redis cluster:', error);
+      this.isRedisAvailable = false;
+    }
+
+    // Initialize circuit breaker with better configuration
+    this.redisBreaker = new CircuitBreaker(
+      async (key: string) => {
+        if (!this.isRedisAvailable) {
+          throw new Error('Redis is unavailable');
+        }
+        return await this.redisCluster.get(key);
+      },
+      {
+        timeout: config.circuitBreaker.timeout,
+        resetTimeout: config.circuitBreaker.resetTimeout,
+        errorThresholdPercentage: config.circuitBreaker.errorThreshold,
+        name: 'redis-rate-limiter'
+      }
+    );
+
+    this.redisBreaker.fallback(() => {
+      logger.warn('Circuit breaker fallback activated, using local counters');
+      return null;
+    });
+
+    // Periodic cleanup of local counters
+    setInterval(() => {
+      this.cleanupLocalCounters();
+    }, config.windowMs);
+  }
+
+  private cleanupLocalCounters(): void {
+    const now = Date.now();
+    for (const [key, window] of this.localCounters.entries()) {
+      if (now - window.timestamp > this.config.windowMs) {
+        this.localCounters.delete(key);
+      }
+    }
+  }
+
+  public async checkLimit(clientId: string, userType: UserType): Promise<RateLimitResult> {
+    const now = Date.now();
+    const key = `ratelimit:${clientId}:${userType}`;
+    
+    try {
+      if (this.isRedisAvailable) {
+        // Try Redis first
+        const result = await this.redisBreaker.fire(key);
+        if (result !== null) {
+          return JSON.parse(result);
+        }
+      }
+      
+      // Fallback to local counting if Redis is unavailable
+      return this.checkLocalLimit(clientId, userType, now);
+    } catch (error) {
+      logger.error('Rate limiting error:', error);
+      
+      // Use fallback strategy based on configuration
+      if (this.config.fallbackStrategy === 'PERMISSIVE') {
+        return {
+          limited: false,
+          remaining: this.config.limits[userType],
+          reset: now + this.config.windowMs,
+          total: this.config.limits[userType]
+        };
+      }
+      
+      // Default to local limiting
       return this.checkLocalLimit(clientId, userType, now);
     }
   }
 
-  /**
-   * Fallback to local counting when Redis is unavailable
-   */
   private checkLocalLimit(clientId: string, userType: UserType, now: number): RateLimitResult {
-    const window = this.localCounters.get(clientId) || { count: 0, timestamp: now };
-    const limit = userType === 'premium' ? this.config.limits.premium : this.config.limits.standard;
-
-    // Reset window if expired
-    if (now - window.timestamp >= this.config.windowMs) {
-      window.count = 0;
-      window.timestamp = now;
+    const key = `${clientId}:${userType}`;
+    const limit = this.config.limits[userType];
+    
+    const currentWindow = this.localCounters.get(key) || { count: 0, timestamp: now };
+    
+    // Clean up old window
+    if (now - currentWindow.timestamp > this.config.windowMs) {
+      currentWindow.count = 0;
+      currentWindow.timestamp = now;
     }
-
-    if (window.count >= limit) {
-      return {
-        limited: true,
-        remaining: 0,
-        reset: Math.ceil((window.timestamp + this.config.windowMs) / 1000),
-        total: limit
-      };
+    
+    const isLimited = currentWindow.count >= limit;
+    if (!isLimited) {
+      currentWindow.count++;
     }
-
-    window.count++;
-    this.localCounters.set(clientId, window);
-
+    
+    this.localCounters.set(key, currentWindow);
+    
     return {
-      limited: false,
-      remaining: limit - window.count,
-      reset: Math.ceil((window.timestamp + this.config.windowMs) / 1000),
+      limited: isLimited,
+      remaining: Math.max(0, limit - currentWindow.count),
+      reset: currentWindow.timestamp + this.config.windowMs,
       total: limit
     };
   }
@@ -214,10 +252,15 @@ export default function createRateLimiter(config: RateLimiterConfig) {
     await rateLimiter.cleanup();
   });
 
-  return async (req: Request, res: Response, next: NextFunction) => {
+  return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    // Skip rate limiting for health and metrics endpoints
+    if (req.path === '/health' || req.path === '/metrics') {
+      return next();
+    }
+
     try {
-      const clientId = req.user?.id || req.ip;
-      const userType = req.user?.type === 'premium' ? 'premium' : 'standard';
+      const clientId = req.user?.id || req.ip || 'anonymous';
+      const userType = req.user?.type || 'standard';
 
       const result = await rateLimiter.checkLimit(clientId, userType);
 
@@ -236,7 +279,7 @@ export default function createRateLimiter(config: RateLimiterConfig) {
           method: req.method 
         });
         
-        return res.status(HttpStatus.TOO_MANY_REQUESTS).json({
+        return res.status(429).json({
           error: 'Too many requests',
           retryAfter: result.reset - Math.floor(Date.now() / 1000)
         });
@@ -249,7 +292,7 @@ export default function createRateLimiter(config: RateLimiterConfig) {
       if (config.fallbackStrategy === 'PERMISSIVE') {
         next();
       } else {
-        res.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        res.status(500).json({
           error: 'Rate limiting service unavailable'
         });
       }

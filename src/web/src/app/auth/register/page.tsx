@@ -118,14 +118,12 @@ const RegistrationPage: React.FC = () => {
       console.info('Registration successful', {
         timestamp: Date.now(),
         deviceType: securityContext.deviceType,
-        isClinicalEnvironment: securityContext.isClinicalEnvironment
+        isClinicalEnvironment: securityContext.isClinicalEnvironment,
+        user
       });
 
-      if (mfaSetup.verified) {
-        router.push('/auth/login');
-      } else {
-        router.push('/auth/mfa-setup');
-      }
+      router.push('/auth/verify-email-required');
+
     } catch (error) {
       console.error('Registration success handling failed:', error);
     }

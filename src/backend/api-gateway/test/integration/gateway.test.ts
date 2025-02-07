@@ -20,8 +20,8 @@ const TEST_PREMIUM_JWT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...premium';
 const MOCK_REDIS = new RedisMock();
 
 // Mock services
-const mockAuthService = nock('http://auth-service:3000');
-const mockHealthRecordsService = nock('http://health-records-service:3000');
+const mockAuthService = nock('http://auth-service:8000');
+const mockHealthRecordsService = nock('http://health-records-service:8000');
 
 describe('API Gateway Integration Tests', () => {
   beforeAll(async () => {

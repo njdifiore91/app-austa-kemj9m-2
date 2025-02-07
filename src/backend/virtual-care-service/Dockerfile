@@ -1,7 +1,8 @@
-# Build stage
+# Stage 1: Build environment
 FROM node:18-alpine AS builder
+# node:18-alpine v18.19.0
 
-# Install build essentials
+# Install build dependencies
 RUN apk add --no-cache \
     python3 \
     make \
@@ -11,83 +12,63 @@ RUN apk add --no-cache \
 # Set working directory
 WORKDIR /app
 
-# Copy package files for dependency caching
-COPY package*.json ./
-COPY tsconfig.json ./
-
-# Install dependencies with npm ci for reproducible builds
-RUN npm ci
-
-# Copy source code
-COPY src/ ./src/
-
-# Build TypeScript with production optimizations
+# Copy shared module first
+COPY shared shared/
+WORKDIR /app/shared
+COPY shared/package*.json ./
+RUN npm install
 RUN npm run build
 
-# Prune dev dependencies
-RUN npm prune --production
+# Build virtual-care service
+WORKDIR /app/virtual-care
+COPY virtual-care-service/package*.json ./
+RUN npm install
 
-# Production stage
+# Copy virtual-care service source code
+COPY virtual-care-service .
+
+# Build TypeScript code and inspect directory structure
+RUN node ./node_modules/typescript/bin/tsc -p tsconfig.json && \
+    echo "Contents of current directory:" && \
+    ls -la && \
+    echo "Contents of dist directory:" && \
+    ls -la dist/
+
+# Stage 2: Production environment
 FROM node:18-alpine
+# node:18-alpine v18.19.0
 
-# Create non-root user/group
-RUN addgroup -g 1000 nodegroup && \
-    adduser -u 1000 -G nodegroup -s /bin/sh -D nodeuser
+# Create non-root user and group
+RUN addgroup -S vcservice && \
+    adduser -S -G vcservice -s /bin/sh vcservice
 
 # Set working directory
 WORKDIR /app
 
-# Copy production dependencies and compiled code
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY package.json ./
+# Copy build artifacts and inspect
+COPY --from=builder --chown=vcservice:vcservice /app/virtual-care/dist ./dist
+COPY --from=builder --chown=vcservice:vcservice /app/virtual-care/node_modules ./node_modules
+COPY --from=builder --chown=vcservice:vcservice /app/shared/dist ./shared/dist
+COPY --from=builder --chown=vcservice:vcservice /app/virtual-care/package*.json ./
+RUN echo "Contents of /app directory:" && \
+    ls -la && \
+    echo "Contents of /app/dist directory:" && \
+    ls -la dist/
 
-# Set strict file permissions
-RUN chown -R nodeuser:nodegroup /app && \
-    chmod -R 644 /app && \
-    find /app -type d -exec chmod 755 {} \;
-
-# Configure production environment
-ENV NODE_ENV=production \
-    PORT=3002 \
-    NODE_OPTIONS="--max-old-space-size=2048 --max-http-header-size=16384" \
-    UV_THREADPOOL_SIZE=4
-
-# Create and configure log volume
+# Create and configure log directory
 RUN mkdir -p /app/logs && \
-    chown -R nodeuser:nodegroup /app/logs && \
-    chmod 644 /app/logs
+    chown -R vcservice:vcservice /app/logs && \
+    chmod -R 770 /app/logs
 
-# Expose service port
+# Set environment variables
+ENV NODE_ENV=production \
+    PORT=3002
+
+# Expose port
 EXPOSE 3002
 
-# Create volume for logs
-VOLUME ["/app/logs"]
-
 # Switch to non-root user
-USER nodeuser
+USER vcservice
 
-# Health check configuration
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:3002/health || exit 1
-
-# Add metadata labels
-LABEL maintainer="AUSTA Healthcare" \
-    service="virtual-care" \
-    version="1.0.0" \
-    environment="production" \
-    security.scan-date="${BUILD_DATE}" \
-    org.opencontainers.image.source="https://github.com/austa/virtual-care-service" \
-    org.opencontainers.image.description="Virtual Care Service for secure video consultations"
-
-# Security hardening
-RUN apk add --no-cache curl && \
-    rm -rf /var/cache/apk/* && \
-    echo "nodeuser soft nofile 65535" >> /etc/security/limits.conf && \
-    echo "nodeuser hard nofile 65535" >> /etc/security/limits.conf
-
-# Set security options
-SECURITY_OPTS="--security-opt=no-new-privileges:true"
-
-# Start application with Node.js optimizations
-CMD ["node", "--enable-source-maps", "dist/index.js"]
+# Start the service
+CMD ["node", "dist/index.js"]

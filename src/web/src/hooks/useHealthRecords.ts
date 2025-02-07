@@ -25,6 +25,79 @@ const DEFAULT_PAGE_SIZE = 20;
 const MAX_RETRY_ATTEMPTS = 3;
 const CACHE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+// Mock data for development
+const MOCK_HEALTH_RECORDS: IHealthRecord[] = [
+  {
+    id: '1',
+    type: HealthRecordType.VITAL_SIGNS,
+    date: new Date(),
+    content: {
+      heartRate: 75,
+      bloodPressure: { systolic: 120, diastolic: 80 },
+      temperature: 98.6,
+      oxygenSaturation: 98
+    },
+    status: HealthRecordStatus.FINAL,
+    providerId: 'provider1',
+    patientId: 'patient1',
+    attachments: [],
+    securityClassification: SecurityClassification.HIGHLY_CONFIDENTIAL,
+    encryptionLevel: 'AES256',
+    metadata: {
+      version: 1,
+      createdAt: new Date(),
+      createdBy: 'Dr. Smith',
+      updatedAt: new Date(),
+      updatedBy: 'Dr. Smith',
+      facility: 'General Hospital',
+      department: 'Cardiology',
+      hipaaCompliance: {
+        isProtectedHealth: true,
+        dataMinimizationApplied: true,
+        encryptionVerified: true,
+        accessRestrictions: ['MEDICAL_STAFF'],
+        lastComplianceCheck: new Date(),
+        complianceOfficer: 'Dr. Johnson'
+      },
+      auditTrail: []
+    }
+  },
+  {
+    id: '2',
+    type: HealthRecordType.WEARABLE_DATA,
+    date: new Date(),
+    content: {
+      steps: 8432,
+      caloriesBurned: 1250,
+      activeMinutes: 45
+    },
+    status: HealthRecordStatus.FINAL,
+    providerId: 'provider1',
+    patientId: 'patient1',
+    attachments: [],
+    securityClassification: SecurityClassification.HIGHLY_CONFIDENTIAL,
+    encryptionLevel: 'AES256',
+    metadata: {
+      version: 1,
+      createdAt: new Date(),
+      createdBy: 'FitBit Integration',
+      updatedAt: new Date(),
+      updatedBy: 'FitBit Integration',
+      facility: 'Patient Home',
+      department: 'Wearables',
+      hipaaCompliance: {
+        isProtectedHealth: true,
+        dataMinimizationApplied: true,
+        encryptionVerified: true,
+        accessRestrictions: ['PATIENT', 'MEDICAL_STAFF'],
+        lastComplianceCheck: new Date(),
+        complianceOfficer: 'Dr. Johnson'
+      },
+      auditTrail: []
+    }
+  }
+];
+
 // Custom error class for health records
 export class HealthRecordError extends Error {
   code: string;
@@ -118,47 +191,37 @@ export function useHealthRecords(
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
 
-      const searchParams = new URLSearchParams({
-        page: page.toString(),
-        pageSize: (options.pageSize || DEFAULT_PAGE_SIZE).toString(),
-        types: state.activeFilters.join(','),
-        search: debouncedSearch
+      // Simulate API delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Filter records based on active filters and search query
+      const filteredRecords = MOCK_HEALTH_RECORDS.filter(record => {
+        const matchesFilter = state.activeFilters.length === 0 || 
+                            state.activeFilters.includes(record.type);
+        const matchesSearch = !debouncedSearch || 
+                            JSON.stringify(record).toLowerCase().includes(debouncedSearch.toLowerCase());
+        return matchesFilter && matchesSearch;
       });
 
-      const response = await fetch(`/api/health-records/${patientId}?${searchParams.toString()}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Security-Classification': SecurityClassification.HIGHLY_CONFIDENTIAL
-        }
-      });
-
-      if (!response.ok) {
-        throw new HealthRecordError(ErrorCode.NETWORK_ERROR);
-      }
-
-      const data = await response.json();
-      
       setState(prev => ({
         ...prev,
-        records: page === 1 ? data.records : [...prev.records, ...data.records],
-        totalRecords: data.total,
-        hasMore: data.hasMore,
+        records: page === 1 ? filteredRecords : [...prev.records, ...filteredRecords],
+        totalRecords: filteredRecords.length,
+        hasMore: false, // Since we're using mock data, there's no pagination
         currentPage: page,
         loading: false
       }));
 
-      // Audit log for records access
-      await logAudit('RECORDS_ACCESS', { page, filters: state.activeFilters });
-
+      return filteredRecords;
     } catch (error) {
       setState(prev => ({
         ...prev,
         loading: false,
         error: error instanceof HealthRecordError ? error : new HealthRecordError(ErrorCode.NETWORK_ERROR)
       }));
+      return [];
     }
-  }, [patientId, debouncedSearch, state.activeFilters, options.pageSize]);
+  }, [debouncedSearch, state.activeFilters]);
 
   // Setup auto-fetch and sync
   useEffect(() => {

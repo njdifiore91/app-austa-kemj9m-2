@@ -4,7 +4,7 @@
  * @version 1.0.0
  */
 
-import React, { useCallback, useMemo, useEffect } from 'react';
+import React, { useCallback, useMemo, useEffect, useState } from 'react';
 import { 
   Card, 
   CardContent, 
@@ -28,9 +28,9 @@ import { useHealthRecords } from '../../hooks/useHealthRecords';
 import { HealthRecordType, SecurityClassification } from '../../lib/types/healthRecord';
 
 // Constants for metrics display and validation
-const REFRESH_INTERVAL = 5000; // 5 seconds
+const REFRESH_INTERVAL = 30000; // Changed from 5s to 30s to match dashboard
 const CHART_HEIGHT = 200;
-const DEBOUNCE_DELAY = 300;
+const DEBOUNCE_DELAY = 1000; // Increased from 300ms to 1s
 
 interface HealthMetricsProps {
   patientId: string;
@@ -91,7 +91,7 @@ const HealthMetrics: React.FC<HealthMetricsProps> = ({
   // Initialize hooks for health records
   const { 
     records, 
-    loading, 
+    loading: isLoading, 
     error,
     fetchRecords 
   } = useHealthRecords(patientId, {
@@ -99,6 +99,9 @@ const HealthMetrics: React.FC<HealthMetricsProps> = ({
     enableRealTimeSync: true,
     recordTypes: [HealthRecordType.VITAL_SIGNS, HealthRecordType.WEARABLE_DATA]
   });
+
+  // Keep track of initial load
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Secure data handling functions
   const decryptData = useCallback((encryptedData: Record<string, any> | string) => {
@@ -168,8 +171,15 @@ const HealthMetrics: React.FC<HealthMetricsProps> = ({
     };
   }, [debouncedRefresh, refreshInterval]);
 
-  // Render loading state
-  if (loading) {
+  // Handle initial load state
+  useEffect(() => {
+    if (isInitialLoad && !isLoading) {
+      setIsInitialLoad(false);
+    }
+  }, [isLoading]);
+
+  // Only show loading state on initial load
+  if (isInitialLoad && isLoading) {
     return (
       <Grid container spacing={2} role="region" aria-label="Loading health metrics">
         {[1, 2, 3, 4].map(index => (

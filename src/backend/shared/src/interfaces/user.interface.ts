@@ -105,7 +105,7 @@ export interface IUserAudit {
  * Implements HIPAA compliance and security requirements
  */
 export interface IUser {
-    readonly id: string;
+    readonly id?: string;
     email: string;
     password: string;  // Hashed password only
     role: UserRole;

@@ -9,14 +9,15 @@ import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'; // v1.4.0
 import CryptoJS from 'crypto-js'; // v4.1.1
 import { logger } from '../utils/logger';
 
-import { AuthEndpoints } from '../constants/endpoints';
+import { AuthEndpoints, buildUrl } from '../constants/endpoints';
 import { 
   ILoginCredentials, 
   IAuthTokens, 
   IMFACredentials, 
   IAuthError,
   AuthState,
-  SecurityEvent
+  SecurityEvent,
+  IUser
 } from '../types/auth';
 import { encryptData, WebEncryptionService, EncryptionConfig } from '../utils/encryption';
 
@@ -47,10 +48,34 @@ const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
   }
 };
 
+interface RegisterParams {
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  phoneNumber: string;
+  mfaPreference: string;
+  biometricConsent: boolean;
+  deviceFingerprint: string;
+  gender: string;
+  address: {
+    street: string;
+    city: string;
+    state: string;
+    postalCode: string;
+    country: string;
+  };
+  emergencyContact: {
+    name: string;
+    relationship: string;
+    phoneNumber: string;
+  };
+}
+
 /**
  * HIPAA-compliant authentication API client
  */
-export class AuthAPI {
+class AuthAPI {
   protected client: AxiosInstance;
   private readonly baseURL: string;
   private encryptionService: WebEncryptionService;
@@ -63,8 +88,9 @@ export class AuthAPI {
 
     // Initialize secure HTTP client
     this.client = axios.create({
-      baseURL,
+      baseURL: this.baseURL,
       timeout: config.timeout,
+      withCredentials: true,
       headers: {
         'Content-Type': 'application/json',
         'X-Security-Version': '1.0'
@@ -78,22 +104,31 @@ export class AuthAPI {
    * Configures security interceptors for request/response handling
    */
   private setupSecurityInterceptors(): void {
-    // Request interceptor for security headers and encryption
+    // Request interceptor for security headers
     this.client.interceptors.request.use(async (config) => {
       const requestId = CryptoJS.lib.WordArray.random(16).toString();
       config.headers['X-Request-ID'] = requestId;
       
-      if (config.data) {
-        config.data = await this.encryptionService.encryptField(
-          JSON.stringify(config.data),
-          'auth'
-        );
+      // Add authorization header if token exists in localStorage
+      const storedTokens = localStorage.getItem('auth_tokens');
+      if (storedTokens) {
+        try {
+          // Parse the stored tokens directly since they're already decrypted by useAuth
+          const tokens = JSON.parse(storedTokens);
+          if (tokens.accessToken) {
+            config.headers['Authorization'] = `Bearer ${tokens.accessToken}`;
+          }
+        } catch (error) {
+          console.error('Failed to parse stored tokens:', error);
+          // Remove invalid tokens
+          localStorage.removeItem('auth_tokens');
+        }
       }
       
       return config;
     });
 
-    // Response interceptor for security validation and decryption
+    // Response interceptor for security validation
     this.client.interceptors.response.use(
       async (response) => {
         this.logSecurityEvent({
@@ -111,6 +146,23 @@ export class AuthAPI {
         return response;
       },
       async (error) => {
+        // Log CORS errors specifically
+        if (error.message.includes('CORS')) {
+          this.logSecurityEvent({
+            eventType: 'CORS_ERROR',
+            timestamp: Date.now(),
+            userId: 'anonymous',
+            sessionId: 'none',
+            metadata: {
+              endpoint: error.config?.url,
+              error: error.message,
+              origin: window.location.origin
+            },
+            severity: 'HIGH',
+            outcome: 'FAILURE'
+          });
+        }
+
         this.logSecurityEvent({
           eventType: 'API_ERROR',
           timestamp: Date.now(),
@@ -132,10 +184,17 @@ export class AuthAPI {
    * Processes authentication errors with security context
    */
   private handleAuthError(error: any): IAuthError {
+    // Extract error details from the response
+    const errorResponse = error.response?.data;
+    
     return {
-      code: error.response?.data?.code || 'AUTH_ERROR',
-      message: error.response?.data?.message || 'Authentication failed',
-      details: error.response?.data?.details || {},
+      code: errorResponse?.code || 'AUTH_ERROR',
+      message: errorResponse?.message || 'Authentication failed',
+      details: {
+        field: errorResponse?.details?.field,
+        error: errorResponse?.details?.error,
+        ...errorResponse?.details
+      },
       timestamp: Date.now(),
       requestId: error.config?.headers?.['X-Request-ID']
     };
@@ -149,30 +208,99 @@ export class AuthAPI {
   }
 
   /**
-   * Authenticates user with enhanced security measures
+   * Registers a new user with enhanced security measures
    */
-  public async login(
-    credentials: ILoginCredentials
-  ): Promise<IAuthTokens> {
+  public async register(params: RegisterParams): Promise<{ token: string; fingerprint: string; user: IUser }> {
     try {
-      // Encrypt sensitive credentials
-      const encryptedCredentials = await this.encryptionService.encryptField(
-        JSON.stringify(credentials),
-        'credentials'
-      );
+      console.log('Registration URL:', buildUrl(AuthEndpoints.REGISTER));
+      
+      // Restructure the data to match the auth service expectations
+      const requestData = {
+        email: params.email,
+        password: params.password,
+        role: 'PATIENT',
+        status: 'PENDING', // Explicitly set the initial status
+        profile: {
+          firstName: params.firstName,
+          lastName: params.lastName,
+          phoneNumber: params.phoneNumber,
+          gender: params.gender,
+          address: {
+            street: params.address.street,
+            city: params.address.city,
+            state: params.address.state,
+            postalCode: params.address.postalCode,
+            country: params.address.country
+          },
+          emergencyContact: {
+            name: params.emergencyContact.name,
+            relationship: params.emergencyContact.relationship,
+            phoneNumber: params.emergencyContact.phoneNumber
+          },
+          dateOfBirth: new Date(),
+          preferredLanguage: 'en'
+        },
+        securitySettings: {
+          mfaEnabled: true,
+          mfaMethod: params.mfaPreference,
+          biometricEnabled: params.biometricConsent,
+          deviceFingerprints: [params.deviceFingerprint],
+          lastPasswordChange: new Date(),
+          passwordResetRequired: false,
+          loginAttempts: 0
+        },
+        permissions: [],
+        audit: {
+          createdAt: new Date(),
+          createdBy: 'system',
+          updatedAt: new Date(),
+          updatedBy: 'system',
+          version: 1,
+          changeHistory: []
+        }
+      };
 
       const response = await this.client.post(
-        AuthEndpoints.LOGIN,
-        { credentials: encryptedCredentials }
+        buildUrl(AuthEndpoints.REGISTER),
+        requestData
       );
 
-      const tokens: IAuthTokens = response.data;
+      this.logSecurityEvent({
+        eventType: 'USER_REGISTRATION',
+        timestamp: Date.now(),
+        userId: response.data.user.id,
+        sessionId: params.deviceFingerprint,
+        metadata: {
+          email: params.email,
+          mfaType: params.mfaPreference
+        },
+        severity: 'MEDIUM',
+        outcome: 'SUCCESS'
+      });
+
+      return response.data;
+    } catch (error) {
+      throw this.handleAuthError(error);
+    }
+  }
+
+  /**
+   * Authenticates user with enhanced security measures
+   */
+  public async login(credentials: ILoginCredentials): Promise<{ token: string; fingerprint: string; user: IUser }> {
+    try {
+      const response = await this.client.post(
+        buildUrl(AuthEndpoints.LOGIN),
+        credentials
+      );
+
+      const { token, fingerprint, user } = response.data;
 
       this.logSecurityEvent({
         eventType: 'USER_LOGIN',
         timestamp: Date.now(),
         userId: credentials.email,
-        sessionId: tokens.accessToken,
+        sessionId: token,
         metadata: {
           deviceId: credentials.deviceId
         },
@@ -180,7 +308,7 @@ export class AuthAPI {
         outcome: 'SUCCESS'
       });
 
-      return tokens;
+      return { token, fingerprint, user };
     } catch (error) {
       throw this.handleAuthError(error);
     }
@@ -197,7 +325,7 @@ export class AuthAPI {
       );
 
       const response = await this.client.post(
-        AuthEndpoints.VERIFY_TOKEN,
+        buildUrl(AuthEndpoints.VERIFY_TOKEN),
         { mfa: encryptedMFA }
       );
 
@@ -225,7 +353,7 @@ export class AuthAPI {
    */
   public async logout(): Promise<void> {
     try {
-      await this.client.post(AuthEndpoints.LOGOUT);
+      this.client.post(buildUrl(AuthEndpoints.LOGOUT));
       
       this.logSecurityEvent({
         eventType: 'USER_LOGOUT',
@@ -246,7 +374,7 @@ export class AuthAPI {
    */
   public async refreshToken(): Promise<IAuthTokens> {
     try {
-      const response = await this.client.post(AuthEndpoints.REFRESH_TOKEN);
+      const response = await this.client.post(buildUrl(AuthEndpoints.REFRESH_TOKEN));
       return response.data;
     } catch (error) {
       throw this.handleAuthError(error);
@@ -254,61 +382,41 @@ export class AuthAPI {
   }
 
   /**
-   * Verifies biometric authentication
+   * Verifies user's account with the provided token
    */
-  public async verifyBiometric(credential: any): Promise<IAuthTokens> {
+  public async verifyAccount(userId: string, token: string): Promise<void> {
     try {
+      console.log(AuthEndpoints);
+      // Use the endpoint string directly instead of the enum
+      const url = buildUrl('/auth/verify-account');
+      console.log('Verification URL:', url);
+      console.log('Request payload:', { userId, token });
+      
       const response = await this.client.post(
-        AuthEndpoints.VERIFY_BIOMETRIC,
-        { credential }
+        url,
+        { userId, token }
       );
-      return response.data;
-    } catch (error) {
-      throw this.handleAuthError(error);
-    }
-  }
+      
+      console.log('Verification response:', response.data);
+      console.log('Account verified successfully');
 
-  /**
-   * Validates device fingerprint for security
-   */
-  public async validateDeviceFingerprint(fingerprint: string): Promise<boolean> {
-    try {
-      await this.client.post(AuthEndpoints.VALIDATE_DEVICE, { fingerprint });
-      return true;
+      this.logSecurityEvent({
+        eventType: 'ACCOUNT_VERIFIED',
+        timestamp: Date.now(),
+        userId,
+        sessionId: 'none',
+        metadata: {},
+        severity: 'MEDIUM',
+        outcome: 'SUCCESS'
+      });
     } catch (error) {
-      return false;
+      console.error('Verification error:', error);
+      throw this.handleAuthError(error);
     }
   }
 }
 
-// Create and export a singleton instance
-const authAPI = new AuthAPI(process.env.NEXT_PUBLIC_API_URL || '');
+const authInstance = new AuthAPI(process.env.NEXT_PUBLIC_API_URL || '');
 
-// Export individual functions that use the singleton
-export const login = (credentials: ILoginCredentials): Promise<IAuthTokens> => {
-  return authAPI.login(credentials);
-};
-
-export const verifyMFA = (mfaCredentials: IMFACredentials): Promise<IAuthTokens> => {
-  return authAPI.verifyMFA(mfaCredentials);
-};
-
-export const logout = (): Promise<void> => {
-  return authAPI.logout();
-};
-
-export const refreshToken = (): Promise<IAuthTokens> => {
-  return authAPI.refreshToken();
-};
-
-export const verifyBiometric = (credential: any): Promise<IAuthTokens> => {
-  return authAPI.verifyBiometric(credential);
-};
-
-export const validateDeviceFingerprint = (fingerprint: string): Promise<boolean> => {
-  return authAPI.validateDeviceFingerprint(fingerprint);
-};
-
-// Export the class and default instance
-export type { AuthAPI };
-export default authAPI;
+export { AuthAPI };
+export default authInstance;

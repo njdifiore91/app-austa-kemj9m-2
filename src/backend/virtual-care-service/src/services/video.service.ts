@@ -5,13 +5,14 @@
  */
 
 import { injectable, inject } from 'inversify';
+import { Logger } from 'winston';
 import { Model } from 'mongoose';
-import twilio from 'twilio'; // @version 4.16.0
-import { connect, Room, LocalTrack, RemoteTrack } from 'twilio-video'; // @version 2.27.0
+import { connect, Room, ConnectOptions, LocalTrack } from 'twilio-video';
 import { ISession, SessionStatus, ISessionParticipant } from '../models/session.model';
 import { webRTCConfig } from '../config/webrtc.config';
-import { ErrorCode } from '../../../shared/constants/error-codes';
-import { UserRole } from '../../../shared/interfaces/user.interface';
+import { ErrorCode } from '@shared/constants/error-codes';
+import { UserRole } from '@shared/interfaces/user.interface';
+import { TwilioRoomManager } from '../utils/twilio.utils';
 
 /**
  * Interface for session initialization data
@@ -46,21 +47,16 @@ interface IQualityMetrics {
  */
 @injectable()
 export class VideoService {
-  private readonly twilioClient: twilio.Twilio;
-  private readonly qualityMonitoringInterval = 5000; // 5 seconds
+  private readonly twilioRoomManager: TwilioRoomManager;
   private activeRooms: Map<string, Room> = new Map();
   private qualityMetrics: Map<string, IQualityMetrics> = new Map();
+  private readonly qualityMonitoringInterval = 5000; // 5 seconds
 
   constructor(
-    @inject('SessionModel') private readonly sessionModel: Model<ISession>,
-    @inject('QualityMonitoringService') private readonly qualityMonitor: any
+    @inject('Logger') private readonly logger: Logger,
+    @inject('SessionModel') private readonly sessionModel: Model<ISession>
   ) {
-    // Initialize Twilio client with enhanced security
-    this.twilioClient = twilio(
-      webRTCConfig.twilioConfig.apiKey,
-      webRTCConfig.twilioConfig.apiSecret,
-      { accountSid: webRTCConfig.twilioConfig.accountSid }
-    );
+    this.twilioRoomManager = new TwilioRoomManager(webRTCConfig.twilioConfig, logger);
   }
 
   /**
@@ -68,135 +64,135 @@ export class VideoService {
    */
   public async initializeSession(sessionData: ISessionInitData): Promise<ISession> {
     try {
-      // Create Twilio room with enhanced security settings
-      const room = await this.twilioClient.video.rooms.create({
-        type: webRTCConfig.twilioConfig.roomType,
-        maxParticipants: webRTCConfig.twilioConfig.maxParticipants,
-        recordingRules: webRTCConfig.twilioConfig.recordingRules,
-        mediaRegion: webRTCConfig.twilioConfig.region,
-      });
-
-      // Initialize session with HIPAA compliance checks
+      // Create a new session document
       const session = new this.sessionModel({
         patientId: sessionData.patientId,
         providerId: sessionData.providerId,
         scheduledStartTime: sessionData.scheduledStartTime,
         status: SessionStatus.SCHEDULED,
-        twilioRoomSid: room.sid,
-        metadata: sessionData.metadata,
-        hipaaCompliance: {
-          encryptionVerified: true,
-          dataPrivacyChecks: true,
-          consentObtained: false,
-          auditLogComplete: false,
-          complianceVersion: '1.0'
-        },
-        participants: [],
-        performanceMetrics: {
-          averageLatency: 0,
-          packetLossRate: 0,
-          bitrateUtilization: 0,
-          frameRate: 0,
-          resolution: '',
-          qualityScore: 0,
-          networkStability: 100
-        }
+        metadata: sessionData.metadata
       });
 
+      // Create Twilio room
+      const room = await this.twilioRoomManager.createRoom(session._id.toString(), {
+        type: 'group',
+        recordingEnabled: true
+      });
+
+      // Update session with Twilio room details
+      session.twilioRoomSid = room.sid;
       await session.save();
-      this.activeRooms.set(session.id, room);
-      
-      // Initialize quality monitoring
-      await this.initializeQualityMonitoring(session.id);
+
+      this.logger.info('Session initialized', {
+        sessionId: session._id,
+        roomSid: room.sid
+      });
 
       return session;
     } catch (error) {
-      throw new Error(ErrorCode.INTERNAL_SERVER_ERROR);
+      this.logger.error('Failed to initialize session', { error });
+      throw error;
     }
+  }
+
+  /**
+   * Gets a session by ID
+   */
+  public async getSession(sessionId: string): Promise<ISession | null> {
+    return this.sessionModel.findById(sessionId);
   }
 
   /**
    * Generates secure access tokens for session participants
    */
-  private async generateAccessToken(
+  public async generateAccessToken(
     sessionId: string,
     userId: string,
     role: UserRole
   ): Promise<string> {
-    const AccessToken = twilio.jwt.AccessToken;
-    const VideoGrant = AccessToken.VideoGrant;
+    const session = await this.getSession(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
 
-    const token = new AccessToken(
-      webRTCConfig.twilioConfig.accountSid,
-      webRTCConfig.twilioConfig.apiKey,
-      webRTCConfig.twilioConfig.apiSecret,
-      {
-        ttl: webRTCConfig.twilioConfig.tokenTTL,
-        identity: userId
-      }
-    );
-
-    const videoGrant = new VideoGrant({
-      room: sessionId
-    });
-
-    token.addGrant(videoGrant);
-    return token.toJwt();
+    return this.twilioRoomManager.generateToken(userId, session.twilioRoomSid!);
   }
 
   /**
-   * Initializes comprehensive quality monitoring for a session
+   * Joins a session
    */
-  private async initializeQualityMonitoring(sessionId: string): Promise<void> {
+  public async joinSession(
+    sessionId: string,
+    userId: string,
+    role: UserRole
+  ): Promise<void> {
     const session = await this.sessionModel.findById(sessionId);
-    if (!session) throw new Error(ErrorCode.RESOURCE_NOT_FOUND);
+    if (!session) throw new Error(ErrorCode.ROLE_NOT_FOUND);
 
-    const room = this.activeRooms.get(sessionId);
-    if (!room) throw new Error(ErrorCode.INVALID_OPERATION);
-
-    // Initialize quality metrics
-    this.qualityMetrics.set(sessionId, {
-      bitrate: 0,
-      packetLoss: 0,
-      latency: 0,
-      jitter: 0,
-      resolution: '',
-      frameRate: 0,
-      audioLevel: 0
-    });
-
-    // Set up continuous monitoring
-    setInterval(async () => {
-      const metrics = await this.monitorSessionQuality(sessionId);
-      await this.updateSessionMetrics(sessionId, metrics);
-    }, this.qualityMonitoringInterval);
-  }
-
-  /**
-   * Monitors and analyzes session quality metrics
-   */
-  private async monitorSessionQuality(sessionId: string): Promise<IQualityMetrics> {
-    const room = this.activeRooms.get(sessionId);
-    if (!room) throw new Error(ErrorCode.INVALID_OPERATION);
-
-    const stats = await this.collectRoomStats(room);
-    const metrics: IQualityMetrics = {
-      bitrate: this.calculateBitrate(stats),
-      packetLoss: this.calculatePacketLoss(stats),
-      latency: this.calculateLatency(stats),
-      jitter: this.calculateJitter(stats),
-      resolution: this.getVideoResolution(stats),
-      frameRate: this.getFrameRate(stats),
-      audioLevel: this.getAudioLevel(stats)
+    const participant: ISessionParticipant = {
+      userId,
+      role,
+      joinedAt: new Date(),
+      connectionStatus: 'active',
+      deviceInfo: {
+        platform: 'web',
+        browser: 'unknown',
+        version: '1.0'
+      },
+      networkMetrics: {
+        latency: 0,
+        packetLoss: 0,
+        jitter: 0,
+        bandwidth: 0
+      }
     };
 
-    // Update quality metrics cache
-    this.qualityMetrics.set(sessionId, metrics);
+    session.participants.push(participant);
+    await session.save();
+  }
 
-    // Trigger quality alerts if needed
+  /**
+   * Ends a session
+   */
+  public async endSession(sessionId: string): Promise<void> {
+    const session = await this.sessionModel.findById(sessionId);
+    if (!session) throw new Error(ErrorCode.ROLE_NOT_FOUND);
+
+    session.status = SessionStatus.ENDED;
+    session.endedAt = new Date();
+    await session.save();
+
+    const room = this.activeRooms.get(sessionId);
+    if (room) {
+      await room.disconnect();
+      this.activeRooms.delete(sessionId);
+      
+      if (session.twilioRoomSid) {
+        await this.twilioRoomManager.updateRoomStatus(session.twilioRoomSid, 'completed');
+      }
+    }
+  }
+
+  /**
+   * Monitors session quality
+   */
+  public async monitorQuality(
+    sessionId: string,
+    metrics: IQualityMetrics
+  ): Promise<void> {
+    await this.updateSessionMetrics(sessionId, metrics);
     await this.handleQualityAlerts(sessionId, metrics);
+  }
 
-    return metrics;
+  /**
+   * Handles connection recovery
+   */
+  public async handleRecovery(sessionId: string): Promise<void> {
+    const session = await this.sessionModel.findById(sessionId);
+    if (!session) throw new Error(ErrorCode.ROLE_NOT_FOUND);
+
+    // Implement recovery logic here
+    // For example: reconnect participants, adjust quality settings, etc.
   }
 
   /**
@@ -230,63 +226,20 @@ export class VideoService {
 
     if (metrics.packetLoss > qualityThresholds.maxPacketLossPercentage ||
         metrics.bitrate < qualityThresholds.minBitrateKbps) {
-      await this.qualityMonitor.triggerAlert({
+      await this.twilioRoomManager.triggerAlert({
         sessionId,
-        metrics,
-        severity: 'HIGH',
-        message: 'Session quality degradation detected'
+        metrics
       });
     }
   }
 
-  // Helper methods for stats calculation
-  private calculateBitrate(stats: any): number {
-    // Implementation for bitrate calculation
-    return 0;
-  }
-
-  private calculatePacketLoss(stats: any): number {
-    // Implementation for packet loss calculation
-    return 0;
-  }
-
-  private calculateLatency(stats: any): number {
-    // Implementation for latency calculation
-    return 0;
-  }
-
-  private calculateJitter(stats: any): number {
-    // Implementation for jitter calculation
-    return 0;
-  }
-
-  private getVideoResolution(stats: any): string {
-    // Implementation for video resolution extraction
-    return '';
-  }
-
-  private getFrameRate(stats: any): number {
-    // Implementation for frame rate calculation
-    return 0;
-  }
-
-  private getAudioLevel(stats: any): number {
-    // Implementation for audio level measurement
-    return 0;
-  }
-
   private calculateQualityScore(metrics: IQualityMetrics): number {
     // Implementation for quality score calculation
-    return 0;
+    return 100;
   }
 
   private calculateNetworkStability(metrics: IQualityMetrics): number {
     // Implementation for network stability calculation
-    return 0;
-  }
-
-  private async collectRoomStats(room: Room): Promise<any> {
-    // Implementation for collecting WebRTC stats
-    return {};
+    return 100;
   }
 }

@@ -6,7 +6,7 @@
 // Global constants for API configuration
 export const API_VERSION = 'v1';
 console.log('NEXT_PUBLIC_API_URL', process.env.NEXT_PUBLIC_API_URL);
-export const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.austa.health';
+export const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 /**
  * Constructs a complete API URL with proper versioning and path segments
@@ -14,8 +14,10 @@ export const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.austa.he
  * @returns Fully constructed API endpoint URL
  */
 export const buildUrl = (path: string): string => {
+  console.log('BASE_URL', BASE_URL);
   // Remove leading/trailing slashes and sanitize path
   const sanitizedPath = path.replace(/^\/+|\/+$/g, '');
+  // Remove the 'api' prefix since it's already included in the gateway's path
   return `${BASE_URL}/${API_VERSION}/${sanitizedPath}`;
 };
 
@@ -29,6 +31,7 @@ export enum AuthEndpoints {
   REFRESH_TOKEN = '/auth/refresh',
   VERIFY_TOKEN = '/auth/verify',
   VERIFY_BIOMETRIC = '/auth/verify-biometric',
+  VERIFY_ACCOUNT = '/auth/verify-account',
   LOGOUT = '/auth/logout',
   RESET_PASSWORD = '/auth/reset-password',
   VERIFY_EMAIL = '/auth/verify-email'

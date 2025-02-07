@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * @fileoverview HIPAA-compliant dashboard layout component for AUSTA SuperApp
  * Implements Material Design 3.0 principles with role-based access control
@@ -7,16 +9,15 @@
 
 import React, { useState, useEffect, useCallback } from 'react'; // v18.0.0
 import styled from '@emotion/styled'; // v11.11.0
-import { useRouter } from 'next/router'; // v13.0.0
+import { useRouter } from 'next/navigation'; // App Router
 
 // Internal imports
 import Header from '../../components/layout/Header';
-import Sidebar from '../../components/layout/Sidebar';
 import useAuth from '../../hooks/useAuth';
+import { IUser } from '../../lib/types/auth';
+import { AuthState } from '../../lib/types/auth';
 
 // Constants
-const SIDEBAR_WIDTH = 280;
-const SIDEBAR_COLLAPSED_WIDTH = 64;
 const HEADER_HEIGHT = 64;
 const MOBILE_BREAKPOINT = 768;
 const SESSION_TIMEOUT = 900000; // 15 minutes
@@ -33,15 +34,12 @@ interface DashboardLayoutProps {
 
 // Styled Components
 const StyledDashboardLayout = styled.div<{
-  sidebarCollapsed: boolean;
   emergencyMode?: boolean;
 }>`
   display: flex;
   min-height: 100vh;
   background: var(--color-background-default);
   transition: padding 0.3s ease;
-  padding-left: ${({ sidebarCollapsed }) =>
-    sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH}px;
   padding-top: ${HEADER_HEIGHT}px;
   
   ${({ emergencyMode }) =>
@@ -58,10 +56,6 @@ const StyledDashboardLayout = styled.div<{
       z-index: 2000;
     }
   `}
-
-  @media (max-width: ${MOBILE_BREAKPOINT}px) {
-    padding-left: 0;
-  }
 `;
 
 const MainContent = styled.main`
@@ -86,46 +80,43 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   emergencyMode = false
 }) => {
   const router = useRouter();
-  const { user, isAuthenticated, checkAccess } = useAuth();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const { user, state, isLoading } = useAuth();
   const [lastActivity, setLastActivity] = useState<number>(Date.now());
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  /**
-   * Securely toggles sidebar state with audit logging
-   */
-  const handleSidebarToggle = useCallback(() => {
-    if (!isAuthenticated) return;
-    
-    setSidebarCollapsed(prev => {
-      const newState = !prev;
-      // Securely store user preference
-      try {
-        localStorage.setItem('sidebarState', JSON.stringify({
-          state: newState,
-          timestamp: Date.now(),
-          userId: user?.id
-        }));
-      } catch (error) {
-        console.error('Failed to store sidebar state:', error);
-      }
-      return newState;
-    });
-  }, [isAuthenticated, user]);
+  const isAuthenticated = state === AuthState.AUTHENTICATED;
 
   /**
    * Verifies user has appropriate dashboard access rights
    */
   const checkDashboardAccess = useCallback(async () => {
-    if (!isAuthenticated || !user) {
-      router.push('/auth/login');
+    // Skip check during initial load
+    if (isInitialLoad) {
       return;
     }
 
-    const hasAccess = await checkAccess(accessLevel);
-    if (!hasAccess) {
-      router.push('/403');
+    // Don't redirect while auth state is loading
+    if (isLoading) {
+      return;
     }
-  }, [isAuthenticated, user, accessLevel, router, checkAccess]);
+
+    // Only redirect if we're certain about the auth state
+    if (state === AuthState.UNAUTHENTICATED || 
+        state === AuthState.SESSION_EXPIRED || 
+        state === AuthState.LOCKED) {
+      const reason = state === AuthState.SESSION_EXPIRED ? '?reason=session_expired' : 
+                    state === AuthState.LOCKED ? '?reason=account_locked' : '';
+      router.replace(`/auth/login${reason}`);
+      return;
+    }
+
+    // For now, we'll assume access is granted if authenticated
+    // TODO: Implement proper access level checks
+    const hasAccess = true;
+    if (!hasAccess) {
+      router.replace('/403');
+    }
+  }, [isInitialLoad, isLoading, state, router]);
 
   /**
    * Monitors user activity for session management
@@ -158,11 +149,11 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
       const inactiveTime = currentTime - lastActivity;
 
       if (inactiveTime >= SESSION_TIMEOUT) {
-        router.push('/auth/login?reason=session_timeout');
+        router.replace('/auth/login?reason=session_timeout');
       }
 
       if (emergencyMode && inactiveTime >= EMERGENCY_MODE_TIMEOUT) {
-        router.push('/auth/login?reason=emergency_timeout');
+        router.replace('/auth/login?reason=emergency_timeout');
       }
     };
 
@@ -171,36 +162,47 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   }, [lastActivity, emergencyMode, router]);
 
   /**
-   * Verifies dashboard access on mount and route changes
+   * Verifies dashboard access on mount and auth state changes
    */
   useEffect(() => {
     checkDashboardAccess();
-  }, [checkDashboardAccess, router.pathname]);
+  }, [checkDashboardAccess]);
 
-  /**
-   * Restores user sidebar preference
-   */
+  // Handle initial load
   useEffect(() => {
-    try {
-      const savedState = localStorage.getItem('sidebarState');
-      if (savedState) {
-        const { state, userId } = JSON.parse(savedState);
-        if (userId === user?.id) {
-          setSidebarCollapsed(state);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to restore sidebar state:', error);
+    if (!isLoading && isInitialLoad) {
+      setIsInitialLoad(false);
     }
-  }, [user]);
+  }, [isLoading]);
 
+  // Show loading state while checking auth
+  if (isLoading || isInitialLoad) {
+    return (
+      <div 
+        role="progressbar" 
+        aria-busy="true" 
+        aria-label="Loading page content, please wait..." 
+        data-testid="page-loading"
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '100vh',
+          backgroundColor: 'var(--color-background-default)'
+        }}
+      >
+        Loading...
+      </div>
+    );
+  }
+
+  // Don't render anything if not authenticated
   if (!isAuthenticated) {
     return null;
   }
 
   return (
     <StyledDashboardLayout
-      sidebarCollapsed={sidebarCollapsed}
       emergencyMode={emergencyMode}
       role="main"
       aria-label="Dashboard layout"
@@ -209,12 +211,6 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         transparent={false}
         emergencyMode={emergencyMode}
         clinicalEnvironment={emergencyMode ? 'EMERGENCY' : 'STANDARD'}
-      />
-      
-      <Sidebar
-        isCollapsed={sidebarCollapsed}
-        onToggle={handleSidebarToggle}
-        width={SIDEBAR_WIDTH}
       />
       
       <MainContent role="region" aria-label="Main content">

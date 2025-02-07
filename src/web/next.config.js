@@ -51,7 +51,7 @@ const ContentSecurityPolicy = `
   style-src 'self' 'unsafe-inline';
   img-src 'self' data: https:;
   font-src 'self' data:;
-  connect-src 'self' ${BASE_URL} https://sentry.io;
+  connect-src 'self' ${BASE_URL} http://localhost:* https://sentry.io;
   frame-ancestors 'none';
   media-src 'self' blob:;
   worker-src 'self' blob:;
@@ -114,6 +114,12 @@ const nextConfig = {
     formats: ['image/avif', 'image/webp'],
   },
   webpack: (config, { dev, isServer }) => {
+    // Exclude Flow type definition files
+    config.module.rules.push({
+      test: /\.flow$/,
+      loader: 'ignore-loader'
+    });
+
     // Optimize bundle splitting
     config.optimization = {
       ...config.optimization,

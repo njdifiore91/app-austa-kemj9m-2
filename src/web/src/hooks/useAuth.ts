@@ -11,15 +11,7 @@ import { useState, useEffect, useCallback, useContext, useRef } from 'react'; //
 import jwtDecode from 'jwt-decode'; // v3.1.2
 import CryptoJS from 'crypto-js'; // v4.1.1
 
-import {
-  login,
-  verifyMFA,
-  refreshToken,
-  logout,
-  verifyBiometric,
-  validateDeviceFingerprint
-} from '../lib/api/auth';
-
+import authInstance from '../lib/api/auth';
 import {
   IAuthTokens,
   ILoginCredentials,
@@ -27,10 +19,9 @@ import {
   AuthState,
   IAuthContext,
   IAuthError,
-  SecurityEvent
+  SecurityEvent,
+  IUser
 } from '../lib/types/auth';
-
-import { IUser } from '../lib/types/user';
 import { WebEncryptionService } from '../lib/utils/encryption';
 
 // Security constants
@@ -44,11 +35,9 @@ const ENCRYPTION_KEY_VERSION = '1';
 const encryptionService = new WebEncryptionService();
 
 interface LoginResponse {
-  success: boolean;
+  token: string;
+  fingerprint: string;
   user: IUser;
-  accessToken: string;
-  refreshToken: string;
-  idToken: string;
 }
 
 /**
@@ -126,7 +115,7 @@ const useAuth = (): IAuthContext & {
     refreshTokenTimeoutRef.current = setTimeout(async () => {
       try {
         if (tokens?.refreshToken) {
-          const newTokens = await refreshToken();
+          const newTokens = await authInstance.refreshToken();
           await securelyStoreTokens(newTokens);
           setTokens(newTokens);
           setupTokenRefresh();
@@ -166,7 +155,7 @@ const useAuth = (): IAuthContext & {
   const handleSessionTimeout = useCallback(async () => {
     logSecurityEvent({
       eventType: 'SESSION_TIMEOUT',
-      userId: user?.id || '',
+      userId: user?.email || 'anonymous',
       sessionId: tokens?.accessToken || '',
       metadata: { lastActivity },
       severity: 'MEDIUM',
@@ -191,30 +180,25 @@ const useAuth = (): IAuthContext & {
         throw new Error('Account locked due to multiple failed attempts');
       }
 
-      // Generate and validate device fingerprint
-      const isValidDevice = await validateDeviceFingerprint('');
-      deviceFingerprintRef.current = isValidDevice ? 'valid_device' : '';
-      
       const enhancedCredentials = {
         ...credentials,
-        deviceId: deviceFingerprintRef.current,
         clientMetadata: {
           userAgent: navigator.userAgent,
           timestamp: Date.now().toString()
         }
       };
 
-      const response = await login(enhancedCredentials) as unknown as LoginResponse;
+      const response = await authInstance.login(enhancedCredentials);
       
       // Validate response
-      if (!response || !response.success || !response.user || !response.accessToken) {
+      if (!response || !response.token || !response.user) {
         throw new Error('Invalid response from server');
       }
 
       const authTokens: IAuthTokens = {
-        accessToken: response.accessToken,
-        refreshToken: response.refreshToken,
-        idToken: response.idToken,
+        accessToken: response.token,
+        refreshToken: response.token, // Using the same token since refresh token isn't provided
+        idToken: response.token,
         expiresAt: Date.now() + TOKEN_REFRESH_INTERVAL,
         tokenType: 'Bearer',
         scope: ['openid', 'profile', 'email']
@@ -231,8 +215,8 @@ const useAuth = (): IAuthContext & {
       logSecurityEvent({
         eventType: 'LOGIN_SUCCESS',
         userId: response.user.email,
-        sessionId: authTokens.accessToken,
-        metadata: { deviceId: deviceFingerprintRef.current },
+        sessionId: response.token,
+        metadata: { timestamp: Date.now() },
         severity: 'MEDIUM',
         outcome: 'SUCCESS',
         timestamp: Date.now()
@@ -242,7 +226,7 @@ const useAuth = (): IAuthContext & {
     } catch (error) {
       setLoginAttempts(prev => prev + 1);
       handleAuthError(error);
-      throw error; // Re-throw to propagate to the form
+      throw error;
     } finally {
       setIsLoading(false);
     }
@@ -263,9 +247,12 @@ const useAuth = (): IAuthContext & {
     setError(authError);
     logSecurityEvent({
       eventType: 'AUTH_ERROR',
-      userId: user?.id || '',
-      sessionId: tokens?.accessToken || '',
-      metadata: authError,
+      userId: user?.email || 'anonymous',
+      sessionId: error.config?.headers?.['x-session-id'] || 'none',
+      metadata: {
+        endpoint: error.config?.url,
+        error: error.message
+      },
       severity: 'HIGH',
       outcome: 'FAILURE',
       timestamp: Date.now()
@@ -278,8 +265,15 @@ const useAuth = (): IAuthContext & {
   const handleLogout = async (): Promise<void> => {
     try {
       setIsLoading(true);
-      if (tokens?.accessToken) {
-        await logout();
+      
+      // Get the current token before clearing storage
+      const storedTokens = localStorage.getItem('auth_tokens');
+      if (storedTokens) {
+        const currentTokens = JSON.parse(storedTokens);
+        if (currentTokens.accessToken) {
+          // Call logout with the current token
+          await authInstance.logout();
+        }
       }
       
       // Clear security context
@@ -297,7 +291,7 @@ const useAuth = (): IAuthContext & {
 
       logSecurityEvent({
         eventType: 'LOGOUT',
-        userId: user?.id || '',
+        userId: user?.email || '',
         sessionId: tokens?.accessToken || '',
         metadata: { timestamp: Date.now() },
         severity: 'LOW',
@@ -312,7 +306,7 @@ const useAuth = (): IAuthContext & {
   };
 
   const handleVerifyMFA = async (credentials: IMFACredentials): Promise<void> => {
-    const tokens = await verifyMFA(credentials);
+    const tokens = await authInstance.verifyMFA(credentials);
     await securelyStoreTokens(tokens);
     setTokens(tokens);
   };

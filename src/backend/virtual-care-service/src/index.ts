@@ -13,6 +13,8 @@ import dotenv from 'dotenv'; // @version 16.3.1
 import winston from 'winston'; // @version 3.10.0
 import { Server } from 'http';
 import { Container } from 'inversify';
+import { InversifyExpressServer } from 'inversify-express-utils';
+import { Server as SocketServer } from 'socket.io';
 
 // Internal imports
 import { webRTCConfig } from './config/webrtc.config';
@@ -49,6 +51,7 @@ const corsOptions = {
 // Advanced security headers configuration for WebRTC
 const helmetOptions = {
   contentSecurityPolicy: {
+    useDefaults: true,
     directives: {
       defaultSrc: ["'self'"],
       connectSrc: ["'self'", 'wss://*.twilio.com'],
@@ -58,14 +61,20 @@ const helmetOptions = {
     }
   },
   crossOriginEmbedderPolicy: true,
-  crossOriginOpenerPolicy: { policy: 'same-origin' },
-  crossOriginResourcePolicy: { policy: 'same-site' },
+  crossOriginOpenerPolicy: {
+    policy: "same-origin" as const
+  },
+  crossOriginResourcePolicy: {
+    policy: "same-site" as const
+  },
   strictTransportSecurity: {
     maxAge: 31536000,
     includeSubDomains: true,
     preload: true
   },
-  referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
+  referrerPolicy: {
+    policy: "strict-origin-when-cross-origin" as const
+  }
 };
 
 // Configure Winston logger with HIPAA compliance
@@ -92,52 +101,59 @@ if (NODE_ENV !== 'production') {
  * Initializes the Express application with enhanced security middleware
  */
 async function initializeApp(): Promise<Application> {
-  const app = express();
-
-  // Security middleware
-  app.use(helmet(helmetOptions));
-  app.use(cors(corsOptions));
-  app.use(express.json({ limit: '1mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
-
-  // Request logging middleware
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    logger.info('Incoming request', {
-      method: req.method,
-      path: req.path,
-      ip: req.ip,
-      userAgent: req.get('user-agent')
-    });
-    next();
-  });
-
   // Initialize dependency injection container
   const container = new Container();
+  
+  // Bind services
   container.bind<VideoService>('VideoService').to(VideoService);
-  container.bind<ConsultationController>('ConsultationController').to(ConsultationController);
+  container.bind<winston.Logger>('Logger').toConstantValue(logger);
+  
+  // Create socket server for real-time communication
+  const socketServer = new SocketServer();
+  container.bind<SocketServer>('SocketServer').toConstantValue(socketServer);
+  
+  // Create and configure InversifyExpressServer
+  const server = new InversifyExpressServer(container);
+  
+  server.setConfig((app) => {
+    // Security middleware
+    app.use(helmet(helmetOptions));
+    app.use(cors(corsOptions));
+    app.use(express.json({ limit: '1mb' }));
+    app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-  // Register routes
-  const consultationController = container.get<ConsultationController>('ConsultationController');
-  app.use('/api/v1/consultations', consultationController.router);
-
-  // Error handling middleware
-  app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
-    logger.error('Error occurred', {
-      error: err.message,
-      stack: err.stack,
-      path: req.path,
-      method: req.method
+    // Request logging middleware
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      logger.info('Incoming request', {
+        method: req.method,
+        path: req.path,
+        ip: req.ip,
+        userAgent: req.get('user-agent')
+      });
+      next();
     });
-
-    const errorResponse = {
-      code: ErrorCode.INTERNAL_SERVER_ERROR,
-      message: ErrorMessage[ErrorCode.INTERNAL_SERVER_ERROR].message
-    };
-
-    res.status(500).json(errorResponse);
   });
 
-  return app;
+  server.setErrorConfig((app) => {
+    // Error handling middleware
+    app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+      logger.error('Error occurred', {
+        error: err.message,
+        stack: err.stack,
+        path: req.path,
+        method: req.method
+      });
+
+      const errorResponse = {
+        code: ErrorCode.INTERNAL_SERVER_ERROR,
+        message: ErrorMessage[ErrorCode.INTERNAL_SERVER_ERROR].message
+      };
+
+      res.status(500).json(errorResponse);
+    });
+  });
+
+  return server.build();
 }
 
 /**
@@ -147,8 +163,6 @@ async function startServer(app: Application): Promise<void> {
   try {
     // Connect to MongoDB with enhanced security
     await mongoose.connect(MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
       serverSelectionTimeoutMS: 5000,
       ssl: NODE_ENV === 'production',
       sslValidate: true
@@ -161,9 +175,9 @@ async function startServer(app: Application): Promise<void> {
       logger.info(`Virtual care service listening on port ${PORT}`);
     });
 
-    // Initialize WebRTC service
-    const videoService = new VideoService(webRTCConfig);
-    await videoService.initialize();
+    // Initialize WebRTC service with logger
+    const container = new Container();
+    const videoService = container.get<VideoService>('VideoService');
     logger.info('WebRTC service initialized');
 
     // Graceful shutdown handler

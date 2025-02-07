@@ -104,6 +104,13 @@ const LoginPage: React.FC = () => {
     emergencyAccess: false
   });
 
+  // Watch for auth state changes and redirect when authenticated
+  useEffect(() => {
+    if (authState === AuthState.AUTHENTICATED) {
+      router.push('/dashboard');
+    }
+  }, [authState, router]);
+
   // Initialize security context
   useEffect(() => {
     const initializeSecurityContext = async () => {
@@ -137,15 +144,11 @@ const LoginPage: React.FC = () => {
         deviceType: securityContext.deviceType,
         isClinicalEnvironment: securityContext.isClinicalEnvironment
       });
-
-      // Redirect based on authentication state
-      if (authState === AuthState.AUTHENTICATED) {
-        router.push('/dashboard');
-      }
+      router.push('/dashboard');
     } catch (error) {
       console.error('Login success handling failed:', error);
     }
-  }, [authState, router, securityContext]);
+  }, [securityContext]);
 
   /**
    * Handles login errors with security measures

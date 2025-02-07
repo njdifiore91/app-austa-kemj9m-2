@@ -7,6 +7,7 @@ import { css } from '@emotion/react';
 import styled from '@emotion/styled';
 import { useAuthContext } from '../../contexts/AuthContext';
 import useAuth from '../../hooks/useAuth';
+import { Global } from '@emotion/react';
 
 // Internal imports
 import { 
@@ -168,6 +169,11 @@ const Header: React.FC<HeaderProps> = ({
   const auth = useAuthContext();
   const { logout } = useAuth();
   const [isScrolled, setIsScrolled] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Handle scroll transparency
   useEffect(() => {
@@ -215,106 +221,120 @@ const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <StyledHeader
-      transparent={transparent && !isScrolled}
-      emergencyMode={emergencyMode}
-      clinicalEnvironment={clinicalEnvironment}
-      className={className}
-      role="banner"
-      aria-label="Main header"
-      suppressHydrationWarning
-    >
-      <Logo onClick={() => router.push('/')} suppressHydrationWarning>
-        <Image 
-          src="/logo.svg"
-          alt="AUSTA SuperApp"
-          width={120}
-          height={32}
-          priority
-        />
-      </Logo>
+    <>
+      <Global
+        styles={css`
+          :root {
+            --color-surface-primary: #ffffff;
+            --color-surface-sterile: #f5f5f5;
+            --color-surface-emergency: #fff3f3;
+            --color-error-100: #ffebee;
+            --color-text-primary: #1a1a1a;
+            --color-surface-hover: rgba(0, 0, 0, 0.04);
+          }
+        `}
+      />
+      {mounted && (
+        <StyledHeader
+          transparent={transparent && !isScrolled}
+          emergencyMode={emergencyMode}
+          clinicalEnvironment={clinicalEnvironment}
+          className={className}
+          role="banner"
+          aria-label="Main header"
+          suppressHydrationWarning
+        >
+          <Logo onClick={() => router.push('/')} suppressHydrationWarning>
+            <Image 
+              src="/logo.svg"
+              alt="AUSTA SuperApp"
+              width={120}
+              height={32}
+              priority
+            />
+          </Logo>
 
-      {auth.state === 'AUTHENTICATED' ? (
-        <>
-          <Navigation role="navigation">
-            <NavItem 
-              href={DASHBOARD_ROUTES.HOME}
-              active={isActive('/dashboard')}
-            >
-              Dashboard
-            </NavItem>
-            <NavItem 
-              href={VIRTUAL_CARE_ROUTES.HOME}
-              active={isActive('/virtual-care')}
-            >
-              Virtual Care
-            </NavItem>
-            <NavItem 
-              href={HEALTH_RECORDS_ROUTES.HOME}
-              active={isActive('/health-records')}
-            >
-              Health Records
-            </NavItem>
-            <NavItem 
-              href={CLAIMS_ROUTES.HOME}
-              active={isActive('/claims')}
-            >
-              Claims
-            </NavItem>
-            <NavItem 
-              href={MARKETPLACE_ROUTES.HOME}
-              active={isActive('/marketplace')}
-            >
-              Marketplace
-            </NavItem>
-          </Navigation>
+          {auth.state === 'AUTHENTICATED' ? (
+            <>
+              <Navigation role="navigation">
+                <NavItem 
+                  href={DASHBOARD_ROUTES.HOME}
+                  active={isActive('/dashboard')}
+                >
+                  Dashboard
+                </NavItem>
+                <NavItem 
+                  href={VIRTUAL_CARE_ROUTES.HOME}
+                  active={isActive('/virtual-care')}
+                >
+                  Virtual Care
+                </NavItem>
+                <NavItem 
+                  href={HEALTH_RECORDS_ROUTES.HOME}
+                  active={isActive('/health-records')}
+                >
+                  Health Records
+                </NavItem>
+                <NavItem 
+                  href={CLAIMS_ROUTES.HOME}
+                  active={isActive('/claims')}
+                >
+                  Claims
+                </NavItem>
+                <NavItem 
+                  href={MARKETPLACE_ROUTES.HOME}
+                  active={isActive('/marketplace')}
+                >
+                  Marketplace
+                </NavItem>
+              </Navigation>
 
-          <UserSection>
-            {emergencyMode && (
-              <EmergencyButton
-                onClick={() => handleEmergencyNavigation(EMERGENCY_ROUTES.HOME, 'HIGH')}
-                aria-label="Emergency access"
+              <UserSection>
+                {emergencyMode && (
+                  <EmergencyButton
+                    onClick={() => handleEmergencyNavigation(EMERGENCY_ROUTES.HOME, 'HIGH')}
+                    aria-label="Emergency access"
+                  >
+                    Emergency Mode
+                  </EmergencyButton>
+                )}
+                
+                  <>
+                    <NavItem 
+                      href={DASHBOARD_ROUTES.PROFILE}
+                      aria-label="User profile"
+                    >
+                      {auth.user?.profile?.firstName} {auth.user?.profile?.lastName}
+                    </NavItem>
+                    <NavItem 
+                      onClick={handleLogout}
+                      role="button"
+                      aria-label="Logout"
+                    >
+                      Logout
+                    </NavItem>
+                  </>
+              </UserSection>
+            </>
+          ) : (
+            <AuthSection>
+              <NavItem 
+                href={AUTH_ROUTES.LOGIN}
+                active={isActive('/auth/login')}
               >
-                Emergency Mode
-              </EmergencyButton>
-            )}
-            
-            {auth.user && (
-              <>
-                <NavItem 
-                  href={DASHBOARD_ROUTES.PROFILE}
-                  aria-label="User profile"
-                >
-                  {auth.user.profile.firstName} {auth.user.profile.lastName}
-                </NavItem>
-                <NavItem 
-                  onClick={handleLogout}
-                  role="button"
-                  aria-label="Logout"
-                >
-                  Logout
-                </NavItem>
-              </>
-            )}
-          </UserSection>
-        </>
-      ) : (
-        <AuthSection>
-          <NavItem 
-            href={AUTH_ROUTES.LOGIN}
-            active={isActive('/auth/login')}
-          >
-            Login
-          </NavItem>
-          <NavItem 
-            href={AUTH_ROUTES.REGISTER}
-            active={isActive('/auth/register')}
-          >
-            Register
-          </NavItem>
-        </AuthSection>
+                Login
+              </NavItem>
+              <NavItem 
+                href={AUTH_ROUTES.REGISTER}
+                active={isActive('/auth/register')}
+              >
+                Register
+              </NavItem>
+            </AuthSection>
+          )}
+        </StyledHeader>
       )}
-    </StyledHeader>
+    </>
   );
 };
 

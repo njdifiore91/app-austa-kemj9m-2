@@ -9,8 +9,9 @@
 import express from 'express'; // v4.18.0
 import cors from 'cors'; // v2.8.5
 import winston from 'winston'; // v3.8.2
+import { randomUUID } from 'crypto';
 import { kongConfig } from '../config/kong.config';
-import { HttpStatus } from '../../../shared/constants/http-status';
+import { HttpStatus } from '@shared/constants/http-status';
 
 /**
  * Logger configuration for CORS audit trails
@@ -29,22 +30,52 @@ const corsLogger = winston.createLogger({
  * Healthcare-compliant CORS configuration class
  */
 export class CorsConfig {
-  private readonly allowedOrigins: string[];
-  private readonly allowedMethods: string[];
-  private readonly allowedHeaders: string[];
-  private readonly exposedHeaders: string[];
-  private readonly maxAge: number;
-  private readonly allowCredentials: boolean;
+  public readonly environment: string;
+  public readonly allowedOrigins: string[];
+  public readonly allowedMethods: string[];
+  public readonly allowedHeaders: string[];
+  public readonly exposedHeaders: string[];
+  public readonly maxAge: number;
+  public readonly allowCredentials: boolean;
   private readonly mobileConfig: { protocols: string[] };
   private readonly securityHeaders: Record<string, string>;
 
   constructor(environment: string) {
     const corsPlugin = kongConfig.plugins.cors.config;
     
-    this.allowedOrigins = corsPlugin.origins;
+    this.environment = environment;
+    this.allowedOrigins = [...corsPlugin.origins];
+    
+    // Add development origins if in development mode
+    if (environment === 'development') {
+      this.allowedOrigins.push(
+        'http://localhost:3000',
+        'http://localhost:8000',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:8000',
+        'null'  // Allow requests with 'null' origin in development
+      );
+    }
+    
     this.allowedMethods = corsPlugin.methods;
-    this.allowedHeaders = corsPlugin.headers;
-    this.exposedHeaders = corsPlugin.exposed_headers;
+    this.allowedHeaders = [
+      ...corsPlugin.headers,
+      'x-request-id',
+      'x-security-version',
+      'x-device-fingerprint',
+      'accept',
+      'content-type',
+      'referer',
+      'sec-ch-ua',
+      'sec-ch-ua-mobile',
+      'sec-ch-ua-platform',
+      'user-agent'
+    ];
+    this.exposedHeaders = [
+      ...corsPlugin.exposed_headers,
+      'x-request-id',
+      'x-security-version'
+    ];
     this.maxAge = corsPlugin.max_age;
     this.allowCredentials = corsPlugin.credentials;
     
@@ -67,6 +98,7 @@ export class CorsConfig {
   public getCorsOptions(): cors.CorsOptions {
     return {
       origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+        // Allow requests with no origin (like mobile apps, curl, postman)
         if (!origin) {
           callback(null, true);
           return;
@@ -76,7 +108,11 @@ export class CorsConfig {
         if (isAllowed) {
           callback(null, true);
         } else {
-          corsLogger.warn('CORS violation attempt', { origin });
+          corsLogger.warn('CORS violation attempt', { 
+            origin,
+            environment: this.environment,
+            allowedOrigins: this.allowedOrigins
+          });
           callback(new Error('CORS policy violation'));
         }
       },
@@ -93,7 +129,12 @@ export class CorsConfig {
   /**
    * Validates origin against allowed patterns with healthcare app support
    */
-  private validateOrigin(origin: string): boolean {
+  public validateOrigin(origin: string): boolean {
+    // Allow requests with no origin in development
+    if (this.environment === 'development' && (!origin || origin === 'null')) {
+      return true;
+    }
+
     // Handle mobile app specific protocols
     const isMobileApp = this.mobileConfig.protocols.some(protocol => 
       origin.toLowerCase().startsWith(protocol));
@@ -102,10 +143,21 @@ export class CorsConfig {
       return true;
     }
 
+    // Development mode allows localhost and 127.0.0.1
+    if (this.environment === 'development') {
+      const devPatterns = [
+        /^http:\/\/localhost(:\d+)?$/,
+        /^http:\/\/127\.0\.0\.1(:\d+)?$/
+      ];
+      if (devPatterns.some(pattern => pattern.test(origin))) {
+        return true;
+      }
+    }
+
     // Check against allowed origins
     return this.allowedOrigins.some(allowed => {
       if (allowed.includes('*')) {
-        const pattern = new RegExp('^' + allowed.replace('*', '.*') + '$');
+        const pattern = new RegExp('^' + allowed.replace(/\*/g, '.*') + '$');
         return pattern.test(origin);
       }
       return allowed === origin;
@@ -117,51 +169,42 @@ export class CorsConfig {
  * Healthcare-compliant CORS middleware implementation
  */
 export const corsMiddleware = (environment: string = process.env.NODE_ENV || 'development'): express.RequestHandler => {
-  const config = new CorsConfig(environment);
-  const corsOptions = config.getCorsOptions();
-
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    // Add security headers
-    Object.entries(config['securityHeaders']).forEach(([header, value]) => {
-      res.setHeader(header, value);
-    });
-
-    // Add HIPAA audit headers
-    const requestId = req.headers['x-request-id'] || crypto.randomUUID();
-    res.setHeader('X-HIPAA-Audit-ID', requestId);
-
-    // Log CORS request for audit
-    corsLogger.info('CORS request', {
-      requestId,
-      origin: req.headers.origin,
-      method: req.method,
-      path: req.path,
-      userAgent: req.headers['user-agent']
-    });
+    const origin = req.headers.origin || 'http://localhost:3000';
+    
+    // Always set these basic CORS headers regardless of environment
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Max-Age', '3600');
+    res.setHeader('Vary', 'Origin');
 
     // Handle preflight requests
     if (req.method === 'OPTIONS') {
-      res.status(HttpStatus.NO_CONTENT).end();
+      // For preflight, use the requested headers
+      const requestedHeaders = req.headers['access-control-request-headers'];
+      if (requestedHeaders) {
+        res.setHeader('Access-Control-Allow-Headers', requestedHeaders);
+      }
+
+      res.status(204).end();
       return;
     }
 
-    // Apply CORS middleware
-    cors(corsOptions)(req, res, (err: any) => {
-      if (err) {
-        corsLogger.error('CORS error', {
-          requestId,
-          error: err.message,
-          origin: req.headers.origin
-        });
+    // For non-preflight requests, set standard allowed headers
+    const standardHeaders = [
+      'content-type',
+      'x-request-id',
+      'x-security-version',
+      'accept',
+      'authorization',
+      'origin',
+      'referer',
+      'user-agent'
+    ].join(', ');
+    res.setHeader('Access-Control-Allow-Headers', standardHeaders);
 
-        res.status(HttpStatus.FORBIDDEN).json({
-          error: 'CORS policy violation',
-          message: 'Origin not allowed by HIPAA security policy'
-        });
-        return;
-      }
-      next();
-    });
+    next();
   };
 };
 

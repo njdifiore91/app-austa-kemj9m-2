@@ -4,8 +4,6 @@
  * @license HIPAA-compliant
  */
 
-import type { IUser, UserRole, UserStatus } from './user';
-
 /**
  * Enum defining all possible authentication states
  * Includes comprehensive security and verification states
@@ -168,14 +166,45 @@ export type SecurityEvent = {
 };
 
 export interface IUser {
-  id: string;
+  _id: string;
   email: string;
-  firstName?: string;
-  lastName?: string;
-  phoneNumber?: string;
-  mfaEnabled?: boolean;
-  mfaType?: string;
-  lastLogin?: Date;
-  createdAt?: Date;
-  updatedAt?: Date;
+  role: string;
+  status: string;
+  profile: {
+    firstName: string;
+    lastName: string;
+    dateOfBirth: Date;
+    gender: string;
+    phoneNumber: string;
+    address: {
+      street: string;
+      city: string;
+      state: string;
+      postalCode: string;
+      country: string;
+    };
+    emergencyContact: {
+      name: string;
+      relationship: string;
+      phoneNumber: string;
+    };
+    preferredLanguage: string;
+  };
+  securitySettings: {
+    mfaEnabled: boolean;
+    mfaMethod: string;
+    lastPasswordChange: Date;
+    passwordResetRequired: boolean;
+    loginAttempts: number;
+    deviceFingerprints: string[];
+  };
+  permissions: string[];
+  audit: {
+    createdAt: Date;
+    createdBy: string;
+    updatedAt: Date;
+    updatedBy: string;
+    version: number;
+    changeHistory: any[];
+  };
 }

@@ -4,12 +4,12 @@
  * @license HIPAA-compliant
  */
 
-import { Schema, model, Document, Model } from 'mongoose'; // v7.0.0
+import { Schema, model, Document, Model, CallbackError } from 'mongoose'; // v7.0.0
 import * as bcrypt from 'bcrypt'; // v5.1.0
-import * as crypto from 'crypto';
-import { IUser, UserRole, UserStatus } from '../../../shared/interfaces/user.interface';
-import { validateUserData } from '../../../shared/utils/validation.utils';
-import { ErrorCode } from '../../../shared/constants/error-codes';
+import { createCipheriv, randomBytes, CipherGCM } from 'crypto';
+import { IUser, UserRole, UserStatus } from '@shared/interfaces/user.interface';
+import { validateUserData } from '@shared/utils/validation.utils';
+import { ErrorCode } from '@shared/constants/error-codes';
 
 /**
  * Interface for audit event tracking
@@ -35,7 +35,7 @@ interface IUserMethods {
 /**
  * Extended interface combining IUser with Document and methods
  */
-interface IUserDocument extends IUser, Document, IUserMethods {}
+export interface IUserDocument extends Omit<IUser, 'id'>, Document, IUserMethods {}
 
 /**
  * Schema definition for sensitive PII data encryption
@@ -155,8 +155,8 @@ UserSchema.pre('save', async function(next) {
     this.password = await bcrypt.hash(this.password, salt);
     this.securitySettings.lastPasswordChange = new Date();
     next();
-  } catch (error) {
-    next(error);
+  } catch (error: unknown) {
+    next(error as CallbackError);
   }
 });
 
@@ -168,8 +168,9 @@ UserSchema.methods.comparePassword = async function(candidatePassword: string): 
     const isMatch = await bcrypt.compare(candidatePassword, this.password);
     await this.updateLoginAttempts(!isMatch);
     return isMatch;
-  } catch (error) {
-    throw new Error(`Password comparison failed: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    throw new Error(`Password comparison failed: ${errorMessage}`);
   }
 };
 
@@ -219,20 +220,21 @@ UserSchema.methods.validatePermissions = async function(requiredPermissions: str
  * Instance method to encrypt sensitive data
  */
 UserSchema.methods.encryptSensitiveData = async function(): Promise<void> {
-  const key = crypto.randomBytes(encryptedFields.keyLength);
-  const iv = crypto.randomBytes(encryptedFields.ivLength);
+  const key = randomBytes(encryptedFields.keyLength);
+  const iv = randomBytes(encryptedFields.ivLength);
 
   const encrypt = (text: string): string => {
-    const cipher = crypto.createCipheriv(encryptedFields.algorithm, key, iv);
+    const cipher = createCipheriv(encryptedFields.algorithm, key, iv) as CipherGCM;
     let encrypted = cipher.update(text, 'utf8', 'hex');
     encrypted += cipher.final('hex');
-    const tag = cipher.getAuthTag();
-    return `${encrypted}:${tag.toString('hex')}:${iv.toString('hex')}`;
+    const authTag = cipher.getAuthTag();
+    return `${encrypted}:${authTag.toString('hex')}:${iv.toString('hex')}`;
   };
 
   // Encrypt sensitive fields
   for (const field of Object.keys(this.profile)) {
-    if (this.schema.path(`profile.${field}`).options.encrypted) {
+    const path = this.schema.path(`profile.${field}`);
+    if (path?.options?.encrypted) {
       this.profile[field] = encrypt(this.profile[field]);
     }
   }

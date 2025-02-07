@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { format, isWithinInterval } from 'date-fns';
+import { enUS } from 'date-fns/locale';
 import { useTranslation } from 'react-i18next';
 
 import { 
@@ -28,7 +29,7 @@ const formatAppointmentTime = (date: Date, locale: string, timezone: string): st
   return format(
     new Date(date.toLocaleString('en-US', { timeZone: timezone })),
     'PPpp',
-    { locale: require(`date-fns/locale/${locale}`) }
+    { locale: enUS }
   );
 };
 
@@ -145,7 +146,7 @@ export const AppointmentCard: React.FC<AppointmentCardProps> = ({
             {`${provider.profile.firstName} ${provider.profile.lastName}`}
           </span>
           <span className="provider-specialization" aria-label={t('appointment.provider.specialization')}>
-            {provider.specialization}
+            {appointment.metadata?.providerSpecialty as string}
           </span>
         </div>
         <div 

@@ -14,11 +14,10 @@ import { ErrorCode } from '../../../shared/constants/error-codes';
  * Enum for comprehensive session status tracking
  */
 export enum SessionStatus {
-    SCHEDULED = 'SCHEDULED',
-    IN_PROGRESS = 'IN_PROGRESS',
-    COMPLETED = 'COMPLETED',
-    CANCELLED = 'CANCELLED',
-    FAILED = 'FAILED'
+    SCHEDULED = 'scheduled',
+    ACTIVE = 'active',
+    ENDED = 'ended',
+    CANCELLED = 'cancelled'
 }
 
 /**
@@ -51,9 +50,18 @@ export interface ISessionParticipant {
     role: UserRole;
     joinedAt: Date;
     leftAt?: Date;
-    connectionStatus: 'CONNECTED' | 'DISCONNECTED' | 'RECONNECTING';
-    deviceInfo: IDeviceInfo;
-    networkMetrics: INetworkMetrics;
+    connectionStatus: 'active' | 'disconnected' | 'reconnecting';
+    deviceInfo?: {
+        platform: string;
+        browser: string;
+        version: string;
+    };
+    networkMetrics?: {
+        latency: number;
+        packetLoss: number;
+        jitter: number;
+        bandwidth: number;
+    };
 }
 
 /**
@@ -81,15 +89,22 @@ interface IPerformanceMetrics {
 }
 
 /**
+ * Interface for session document methods
+ */
+interface ISessionMethods {
+    validateParticipants(): boolean;
+}
+
+/**
  * Enhanced interface for virtual care session
  */
-export interface ISession extends Document {
-    id: string;
+export interface ISession {
+    _id: string;  // MongoDB document ID
     patientId: string;
     providerId: string;
     scheduledStartTime: Date;
-    actualStartTime?: Date;
-    endTime?: Date;
+    startedAt?: Date;
+    endedAt?: Date;
     status: SessionStatus;
     participants: ISessionParticipant[];
     healthRecordId?: string;
@@ -109,6 +124,8 @@ export interface ISession extends Document {
     }>;
     hipaaCompliance: IHIPAACompliance;
 }
+
+export type ISessionDocument = Document & ISession & ISessionMethods;
 
 /**
  * Create enhanced mongoose schema for session model with optimizations
@@ -130,11 +147,11 @@ const createSessionSchema = (): Schema => {
             required: true,
             index: true
         },
-        actualStartTime: {
+        startedAt: {
             type: Date,
             index: true
         },
-        endTime: {
+        endedAt: {
             type: Date
         },
         status: {
@@ -163,25 +180,32 @@ const createSessionSchema = (): Schema => {
             },
             connectionStatus: {
                 type: String,
-                enum: ['CONNECTED', 'DISCONNECTED', 'RECONNECTING'],
-                required: true
+                enum: ['active', 'disconnected', 'reconnecting'],
+                required: true,
+                default: 'active'
             },
             deviceInfo: {
-                type: {
-                    type: String,
-                    required: true
-                },
-                os: String,
+                platform: String,
                 browser: String,
-                webRTCSupport: Boolean,
-                networkType: String
+                version: String
             },
             networkMetrics: {
-                bitrate: Number,
-                packetLoss: Number,
-                latency: Number,
-                jitter: Number,
-                qualityScore: Number
+                latency: {
+                    type: Number,
+                    default: 0
+                },
+                packetLoss: {
+                    type: Number,
+                    default: 0
+                },
+                jitter: {
+                    type: Number,
+                    default: 0
+                },
+                bandwidth: {
+                    type: Number,
+                    default: 0
+                }
             }
         }],
         healthRecordId: {
@@ -200,13 +224,34 @@ const createSessionSchema = (): Schema => {
             tags: [String]
         },
         performanceMetrics: {
-            averageLatency: Number,
-            packetLossRate: Number,
-            bitrateUtilization: Number,
-            frameRate: Number,
-            resolution: String,
-            qualityScore: Number,
-            networkStability: Number
+            averageLatency: {
+                type: Number,
+                default: 0
+            },
+            packetLossRate: {
+                type: Number,
+                default: 0
+            },
+            bitrateUtilization: {
+                type: Number,
+                default: 0
+            },
+            frameRate: {
+                type: Number,
+                default: 0
+            },
+            resolution: {
+                type: String,
+                default: ''
+            },
+            qualityScore: {
+                type: Number,
+                default: 100
+            },
+            networkStability: {
+                type: Number,
+                default: 100
+            }
         },
         auditLog: [{
             timestamp: {
@@ -255,19 +300,33 @@ const createSessionSchema = (): Schema => {
         collection: 'sessions'
     });
 
+    // Add methods
+    sessionSchema.methods.validateParticipants = function(): boolean {
+        if (!this.participants) return false;
+        
+        return this.participants.every((participant: ISessionParticipant) => {
+            return (
+                participant.userId &&
+                participant.role &&
+                participant.joinedAt &&
+                ['active', 'disconnected', 'reconnecting'].includes(participant.connectionStatus)
+            );
+        });
+    };
+
     // Optimize indexes for common queries
     sessionSchema.index({ 'participants.userId': 1 });
     sessionSchema.index({ scheduledStartTime: 1, status: 1 });
     sessionSchema.index({ patientId: 1, status: 1 });
     sessionSchema.index({ providerId: 1, status: 1 });
 
-    // Add validation middleware
-    sessionSchema.pre('save', async function(next) {
+    // Update validation middleware
+    sessionSchema.pre('save', async function(this: ISessionDocument, next) {
         if (!this.validateParticipants()) {
             throw new Error(ErrorCode.INVALID_INPUT);
         }
         
-        if (!this.hipaaCompliance.encryptionVerified) {
+        if (this.hipaaCompliance && !this.hipaaCompliance.encryptionVerified) {
             throw new Error(ErrorCode.HIPAA_VIOLATION);
         }
         
@@ -280,6 +339,6 @@ const createSessionSchema = (): Schema => {
 /**
  * Enhanced Mongoose model for virtual care sessions
  */
-export const SessionModel = model<ISession>('Session', createSessionSchema());
+export const SessionModel = model<ISessionDocument>('Session', createSessionSchema());
 
 export default SessionModel;
