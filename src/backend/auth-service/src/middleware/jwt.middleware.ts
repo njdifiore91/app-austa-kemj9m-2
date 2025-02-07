@@ -31,7 +31,7 @@ const DEFAULT_OPTIONS: JWTMiddlewareOptions = {
   validateDevice: true,
   enforceFingerprint: true,
   auditLevel: 'STANDARD',
-  sessionTimeout: AUTH_CONFIG.security.hipaa.inactivityTimeout
+  sessionTimeout: AUTH_CONFIG.security.hipaa.inactivityTimeout || 900 // Default to 15 minutes
 };
 
 // Enhanced request interface with security context
@@ -82,17 +82,19 @@ export const jwtMiddleware = (options: Partial<JWTMiddlewareOptions> = {}) => {
       const decoded = await verifyToken(token);
 
       // Validate session timeout
+      const sessionTimeout: any = config.sessionTimeout || DEFAULT_OPTIONS.sessionTimeout;
       if (decoded.lastAccess && 
-          Date.now() - decoded.lastAccess > config.sessionTimeout! * 1000) {
+          Date.now() - decoded.lastAccess > sessionTimeout * 1000) {
         throw new Error(ErrorCode.SESSION_EXPIRED);
       }
 
       // Device validation if enabled
       if (config.validateDevice) {
-        const deviceId = req.headers['x-device-id'] as string;
-        if (!deviceId || deviceId !== decoded.deviceId) {
+        const deviceId = req.headers['x-device-id'];
+        if (!deviceId || typeof deviceId !== 'string' || deviceId !== decoded.deviceId) {
           throw new Error(ErrorCode.UNAUTHORIZED);
         }
+        req.deviceId = deviceId;
       }
 
       // Role-based access control
@@ -117,15 +119,14 @@ export const jwtMiddleware = (options: Partial<JWTMiddlewareOptions> = {}) => {
 
       // Enhance request with security context
       req.user = decoded;
-      req.deviceId = req.headers['x-device-id'] as string;
       req.sessionContext = {
         lastAccess: Date.now(),
         activityCount: (req.sessionContext?.activityCount || 0) + 1
       };
       req.securityContext = {
-        ipAddress: req.ip,
+        ipAddress: req.ip || 'unknown',
         userAgent: req.headers['user-agent'] || 'unknown',
-        geoLocation: req.headers['x-geo-location'] as string
+        geoLocation: req.headers['x-geo-location']?.toString()
       };
 
       // Security audit logging
@@ -140,10 +141,10 @@ export const jwtMiddleware = (options: Partial<JWTMiddlewareOptions> = {}) => {
       });
 
       next();
-    } catch (error) {
+    } catch (error: unknown) {
       // Enhanced error handling with security context
       auditLogger.error('JWT Authentication Failed', {
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
         path: req.path,
@@ -153,12 +154,12 @@ export const jwtMiddleware = (options: Partial<JWTMiddlewareOptions> = {}) => {
 
       // Map internal error codes to HTTP responses
       const errorResponse = {
-        code: error.message,
+        code: error instanceof Error ? error.message : ErrorCode.INTERNAL_SERVER_ERROR,
         message: 'Authentication failed',
         timestamp: new Date().toISOString()
       };
 
-      switch (error.message) {
+      switch (error instanceof Error ? error.message : '') {
         case ErrorCode.UNAUTHORIZED:
         case ErrorCode.TOKEN_EXPIRED:
           return res.status(401).json(errorResponse);

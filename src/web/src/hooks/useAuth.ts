@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * @fileoverview Enhanced authentication hook for AUSTA SuperApp with HIPAA compliance
  * Implements secure authentication state management with comprehensive security features
@@ -9,15 +11,7 @@ import { useState, useEffect, useCallback, useContext, useRef } from 'react'; //
 import jwtDecode from 'jwt-decode'; // v3.1.2
 import CryptoJS from 'crypto-js'; // v4.1.1
 
-import {
-  login,
-  verifyMFA,
-  refreshToken,
-  logout,
-  verifyBiometric,
-  validateDeviceFingerprint
-} from '../lib/api/auth';
-
+import authInstance from '../lib/api/auth';
 import {
   IAuthTokens,
   ILoginCredentials,
@@ -25,10 +19,9 @@ import {
   AuthState,
   IAuthContext,
   IAuthError,
-  SecurityEvent
+  SecurityEvent,
+  IUser
 } from '../lib/types/auth';
-
-import { IUser } from '../lib/types/user';
 import { WebEncryptionService } from '../lib/utils/encryption';
 
 // Security constants
@@ -41,11 +34,17 @@ const ENCRYPTION_KEY_VERSION = '1';
 // Initialize encryption service
 const encryptionService = new WebEncryptionService();
 
+interface LoginResponse {
+  token: string;
+  fingerprint: string;
+  user: IUser;
+}
+
 /**
  * Enhanced authentication hook with comprehensive security features
  */
 const useAuth = (): IAuthContext & {
-  login: (credentials: ILoginCredentials) => Promise<void>;
+  login: (credentials: ILoginCredentials) => Promise<LoginResponse>;
   logout: () => Promise<void>;
   verifyMFA: (credentials: IMFACredentials) => Promise<void>;
   refreshSession: () => Promise<void>;
@@ -116,7 +115,7 @@ const useAuth = (): IAuthContext & {
     refreshTokenTimeoutRef.current = setTimeout(async () => {
       try {
         if (tokens?.refreshToken) {
-          const newTokens = await refreshToken(tokens.refreshToken);
+          const newTokens = await authInstance.refreshToken();
           await securelyStoreTokens(newTokens);
           setTokens(newTokens);
           setupTokenRefresh();
@@ -156,11 +155,12 @@ const useAuth = (): IAuthContext & {
   const handleSessionTimeout = useCallback(async () => {
     logSecurityEvent({
       eventType: 'SESSION_TIMEOUT',
-      userId: user?.id || '',
+      userId: user?.email || 'anonymous',
       sessionId: tokens?.accessToken || '',
       metadata: { lastActivity },
       severity: 'MEDIUM',
-      outcome: 'SUCCESS'
+      outcome: 'SUCCESS',
+      timestamp: Date.now()
     });
 
     await handleLogout();
@@ -170,7 +170,7 @@ const useAuth = (): IAuthContext & {
   /**
    * Enhanced login handler with security measures
    */
-  const handleLogin = async (credentials: ILoginCredentials): Promise<void> => {
+  const handleLogin = async (credentials: ILoginCredentials): Promise<LoginResponse> => {
     try {
       setIsLoading(true);
       setError(null);
@@ -180,21 +180,33 @@ const useAuth = (): IAuthContext & {
         throw new Error('Account locked due to multiple failed attempts');
       }
 
-      // Generate and validate device fingerprint
-      deviceFingerprintRef.current = await validateDeviceFingerprint();
-      
       const enhancedCredentials = {
         ...credentials,
-        deviceId: deviceFingerprintRef.current,
         clientMetadata: {
           userAgent: navigator.userAgent,
           timestamp: Date.now().toString()
         }
       };
 
-      const authTokens = await login(enhancedCredentials);
+      const response = await authInstance.login(enhancedCredentials);
+      
+      // Validate response
+      if (!response || !response.token || !response.user) {
+        throw new Error('Invalid response from server');
+      }
+
+      const authTokens: IAuthTokens = {
+        accessToken: response.token,
+        refreshToken: response.token, // Using the same token since refresh token isn't provided
+        idToken: response.token,
+        expiresAt: Date.now() + TOKEN_REFRESH_INTERVAL,
+        tokenType: 'Bearer',
+        scope: ['openid', 'profile', 'email']
+      };
+
       await securelyStoreTokens(authTokens);
       setTokens(authTokens);
+      setUser(response.user);
       setState(AuthState.AUTHENTICATED);
       setupTokenRefresh();
       setupSessionMonitoring();
@@ -202,15 +214,19 @@ const useAuth = (): IAuthContext & {
 
       logSecurityEvent({
         eventType: 'LOGIN_SUCCESS',
-        userId: credentials.email,
-        sessionId: authTokens.accessToken,
-        metadata: { deviceId: deviceFingerprintRef.current },
+        userId: response.user.email,
+        sessionId: response.token,
+        metadata: { timestamp: Date.now() },
         severity: 'MEDIUM',
-        outcome: 'SUCCESS'
+        outcome: 'SUCCESS',
+        timestamp: Date.now()
       });
+
+      return response;
     } catch (error) {
       setLoginAttempts(prev => prev + 1);
       handleAuthError(error);
+      throw error;
     } finally {
       setIsLoading(false);
     }
@@ -231,11 +247,15 @@ const useAuth = (): IAuthContext & {
     setError(authError);
     logSecurityEvent({
       eventType: 'AUTH_ERROR',
-      userId: user?.id || '',
-      sessionId: tokens?.accessToken || '',
-      metadata: authError,
+      userId: user?.email || 'anonymous',
+      sessionId: error.config?.headers?.['x-session-id'] || 'none',
+      metadata: {
+        endpoint: error.config?.url,
+        error: error.message
+      },
       severity: 'HIGH',
-      outcome: 'FAILURE'
+      outcome: 'FAILURE',
+      timestamp: Date.now()
     });
   };
 
@@ -245,8 +265,15 @@ const useAuth = (): IAuthContext & {
   const handleLogout = async (): Promise<void> => {
     try {
       setIsLoading(true);
-      if (tokens?.accessToken) {
-        await logout(tokens.accessToken);
+      
+      // Get the current token before clearing storage
+      const storedTokens = localStorage.getItem('auth_tokens');
+      if (storedTokens) {
+        const currentTokens = JSON.parse(storedTokens);
+        if (currentTokens.accessToken) {
+          // Call logout with the current token
+          await authInstance.logout();
+        }
       }
       
       // Clear security context
@@ -264,17 +291,24 @@ const useAuth = (): IAuthContext & {
 
       logSecurityEvent({
         eventType: 'LOGOUT',
-        userId: user?.id || '',
+        userId: user?.email || '',
         sessionId: tokens?.accessToken || '',
         metadata: { timestamp: Date.now() },
         severity: 'LOW',
-        outcome: 'SUCCESS'
+        outcome: 'SUCCESS',
+        timestamp: Date.now()
       });
     } catch (error) {
       handleAuthError(error);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleVerifyMFA = async (credentials: IMFACredentials): Promise<void> => {
+    const tokens = await authInstance.verifyMFA(credentials);
+    await securelyStoreTokens(tokens);
+    setTokens(tokens);
   };
 
   // Initialize authentication state
@@ -316,8 +350,10 @@ const useAuth = (): IAuthContext & {
     sessionTimeout: SESSION_TIMEOUT,
     login: handleLogin,
     logout: handleLogout,
-    verifyMFA,
-    refreshSession: setupTokenRefresh
+    verifyMFA: handleVerifyMFA,
+    refreshSession: async () => {
+      await setupTokenRefresh();
+    }
   };
 };
 

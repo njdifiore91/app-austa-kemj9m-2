@@ -1,3 +1,5 @@
+'use client';
+
 import React from 'react';
 import styled from '@emotion/styled';
 import { Box, Container, Typography, Link, Grid } from '@mui/material';

@@ -1,3 +1,5 @@
+'use client';
+
 import React from 'react'; // ^18.2.0
 import styled from '@emotion/styled'; // ^11.11.0
 import Loader from '../components/common/Loader';
@@ -64,8 +66,6 @@ const Loading: React.FC = () => {
       <Loader
         size="large"
         color="primary"
-        overlay={false}
-        ariaLabel={ARIA_LABEL}
       />
     </LoadingContainer>
   );

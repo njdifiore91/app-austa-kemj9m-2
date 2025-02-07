@@ -4,7 +4,7 @@
  * @version 1.0.0
  */
 
-import React, { useCallback, useMemo, useEffect } from 'react';
+import React, { useCallback, useMemo, useEffect, useState } from 'react';
 import { 
   Card, 
   CardContent, 
@@ -22,16 +22,15 @@ import {
   ResponsiveContainer 
 } from 'recharts'; // v2.0.0
 import { debounce } from 'lodash'; // v4.17.21
-import { FHIRValidator } from '@fhir/validator'; // v2.0.0
-import { useSecureData } from '@health/secure-data'; // v1.0.0
+import CryptoJS from 'crypto-js';
 
 import { useHealthRecords } from '../../hooks/useHealthRecords';
 import { HealthRecordType, SecurityClassification } from '../../lib/types/healthRecord';
 
 // Constants for metrics display and validation
-const REFRESH_INTERVAL = 5000; // 5 seconds
+const REFRESH_INTERVAL = 30000; // Changed from 5s to 30s to match dashboard
 const CHART_HEIGHT = 200;
-const DEBOUNCE_DELAY = 300;
+const DEBOUNCE_DELAY = 1000; // Increased from 300ms to 1s
 
 interface HealthMetricsProps {
   patientId: string;
@@ -89,10 +88,10 @@ const HealthMetrics: React.FC<HealthMetricsProps> = ({
   accessLevel,
   theme
 }) => {
-  // Initialize hooks for health records and secure data handling
+  // Initialize hooks for health records
   const { 
     records, 
-    loading, 
+    loading: isLoading, 
     error,
     fetchRecords 
   } = useHealthRecords(patientId, {
@@ -101,22 +100,55 @@ const HealthMetrics: React.FC<HealthMetricsProps> = ({
     recordTypes: [HealthRecordType.VITAL_SIGNS, HealthRecordType.WEARABLE_DATA]
   });
 
-  const { decryptData, validateAccess } = useSecureData({
-    encryptionKey,
-    securityLevel: SecurityClassification.HIGHLY_CONFIDENTIAL
-  });
+  // Keep track of initial load
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  // Memoized metrics processing with FHIR validation
+  // Secure data handling functions
+  const decryptData = useCallback((encryptedData: Record<string, any> | string) => {
+    try {
+      if (typeof encryptedData === 'string') {
+        const bytes = CryptoJS.AES.decrypt(encryptedData, encryptionKey);
+        return JSON.parse(bytes.toString(CryptoJS.enc.Utf8));
+      }
+      // If data is already an object, return as is (for development/testing)
+      return encryptedData;
+    } catch (error) {
+      console.error('Failed to decrypt data:', error);
+      return null;
+    }
+  }, [encryptionKey]);
+
+  const validateAccess = useCallback((requiredLevel: AccessLevel): boolean => {
+    const accessLevels = {
+      [AccessLevel.READ]: 0,
+      [AccessLevel.WRITE]: 1,
+      [AccessLevel.ADMIN]: 2
+    };
+    return accessLevels[accessLevel] >= accessLevels[requiredLevel];
+  }, [accessLevel]);
+
+  // Memoized metrics processing
   const processedMetrics = useMemo(() => {
     if (!records?.length) return null;
 
-    const validator = new FHIRValidator();
     return records
-      .filter(record => validator.validateResource(record))
+      .filter(record => {
+        try {
+          // Basic validation of record structure
+          return record && 
+                 typeof record === 'object' && 
+                 'content' in record && 
+                 'date' in record;
+        } catch (error) {
+          console.error('Invalid record format:', error);
+          return false;
+        }
+      })
       .map(record => ({
         ...decryptData(record.content),
         timestamp: new Date(record.date)
       }))
+      .filter(record => record !== null)
       .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
   }, [records, decryptData]);
 
@@ -139,8 +171,15 @@ const HealthMetrics: React.FC<HealthMetricsProps> = ({
     };
   }, [debouncedRefresh, refreshInterval]);
 
-  // Render loading state
-  if (loading) {
+  // Handle initial load state
+  useEffect(() => {
+    if (isInitialLoad && !isLoading) {
+      setIsInitialLoad(false);
+    }
+  }, [isLoading]);
+
+  // Only show loading state on initial load
+  if (isInitialLoad && isLoading) {
     return (
       <Grid container spacing={2} role="region" aria-label="Loading health metrics">
         {[1, 2, 3, 4].map(index => (

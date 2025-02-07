@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * @fileoverview Navigation sidebar component for AUSTA SuperApp web platform
  * Implements Material Design 3.0 principles with role-based access control
@@ -8,7 +10,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import styled from '@emotion/styled';
 import Link from 'next/link';
-import { useRouter } from 'next/router';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   IconButton,
   Tooltip,
@@ -18,8 +20,10 @@ import {
   ListItemIcon,
   ListItemText,
   useTheme,
-  useMediaQuery
+  useMediaQuery,
+  Theme
 } from '@mui/material';
+import { Theme as EmotionTheme } from '@emotion/react';
 import {
   Menu as MenuIcon,
   ChevronLeft as ChevronLeftIcon,
@@ -68,18 +72,29 @@ interface SidebarProps {
 }
 
 // Styled Components
-const SidebarContainer = styled.nav<{ isCollapsed: boolean; width: number }>`
+const StyledListItem = styled(ListItem)<{ active?: boolean }>`
+  border-radius: ${({ theme }) => (theme as Theme).shape.borderRadius}px;
+  margin-bottom: ${({ theme }) => (theme as Theme).spacing(0.5)};
+  background-color: ${({ active, theme }) =>
+    active ? (theme as Theme).palette.action.selected : 'transparent'};
+  
+  &:hover {
+    background-color: ${({ theme }) => (theme as Theme).palette.action.hover};
+  }
+`;
+
+const StyledNav = styled.nav<{ isCollapsed: boolean; width: number }>`
   width: ${({ isCollapsed, width }) => (isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : width)}px;
   height: 100vh;
-  background: ${({ theme }) => theme.palette.background.paper};
-  border-right: 1px solid ${({ theme }) => theme.palette.divider};
+  background: ${({ theme }) => (theme as Theme).palette.background.paper};
+  border-right: 1px solid ${({ theme }) => (theme as Theme).palette.divider};
   transition: width ${TRANSITION_DURATION} ease-in-out;
   overflow-x: hidden;
   overflow-y: auto;
   position: fixed;
   left: 0;
   top: 0;
-  z-index: ${({ theme }) => theme.zIndex.drawer};
+  z-index: ${({ theme }) => (theme as Theme).zIndex.drawer};
   
   /* Scrollbar styling */
   &::-webkit-scrollbar {
@@ -91,7 +106,7 @@ const SidebarContainer = styled.nav<{ isCollapsed: boolean; width: number }>`
   }
   
   &::-webkit-scrollbar-thumb {
-    background: ${({ theme }) => theme.palette.grey[300]};
+    background: ${({ theme }) => (theme as Theme).palette.grey[300]};
     border-radius: 2px;
   }
 `;
@@ -100,23 +115,12 @@ const SidebarHeader = styled.div`
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: ${({ theme }) => theme.spacing(2)};
+  padding: ${({ theme }) => (theme as Theme).spacing(2)};
   min-height: 64px;
 `;
 
 const NavigationList = styled(List)`
-  padding: ${({ theme }) => theme.spacing(1)};
-`;
-
-const NavigationItem = styled(ListItem)<{ active?: boolean }>`
-  border-radius: ${({ theme }) => theme.shape.borderRadius}px;
-  margin-bottom: ${({ theme }) => theme.spacing(0.5)};
-  background-color: ${({ active, theme }) =>
-    active ? theme.palette.action.selected : 'transparent'};
-  
-  &:hover {
-    background-color: ${({ theme }) => theme.palette.action.hover};
-  }
+  padding: ${({ theme }) => (theme as Theme).spacing(1)};
 `;
 
 // Navigation configuration
@@ -197,6 +201,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onToggle,
   width = SIDEBAR_WIDTH
 }) => {
+  const pathname = usePathname() || '';
   const router = useRouter();
   const theme = useTheme();
   const { user } = useAuth();
@@ -205,18 +210,17 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   // Filter navigation items based on user role
   const navigationItems = user?.role
-    ? getNavigationItems(user.role).filter(item => item.roles.includes(user.role))
+    ? getNavigationItems(user.role as UserRole).filter(item => item.roles.includes(user.role as UserRole))
     : [];
 
   // Check if route is active
   const isRouteActive = useCallback(
     (route: string): boolean => {
-      const currentPath = router.pathname;
-      if (route === currentPath) return true;
-      if (route.includes('[') && currentPath.startsWith(route.split('[')[0])) return true;
+      if (route === pathname) return true;
+      if (route.includes('[') && pathname.startsWith(route.split('[')[0])) return true;
       return false;
     },
-    [router.pathname]
+    [pathname]
   );
 
   // Handle item expansion
@@ -249,12 +253,12 @@ const Sidebar: React.FC<SidebarProps> = ({
           placement="right"
           arrow
         >
-          <NavigationItem
+          <StyledListItem
             active={isRouteActive(item.route)}
             onClick={() => item.children ? handleExpand(item.id) : router.push(item.route)}
             sx={{ pl: level * 2 }}
-            aria-label={item.label}
             role="menuitem"
+            aria-label={item.label}
           >
             <ListItemIcon sx={{ minWidth: 40 }}>
               {item.icon}
@@ -278,7 +282,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 {expandedItems.includes(item.id) ? <CollapseIcon /> : <ExpandIcon />}
               </IconButton>
             )}
-          </NavigationItem>
+          </StyledListItem>
         </Tooltip>
         
         {item.children && (
@@ -291,7 +295,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <SidebarContainer
+    <StyledNav
       isCollapsed={isCollapsed}
       width={width}
       role="navigation"
@@ -311,7 +315,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       <NavigationList role="menu">
         {renderNavigationItems(navigationItems)}
       </NavigationList>
-    </SidebarContainer>
+    </StyledNav>
   );
 };
 

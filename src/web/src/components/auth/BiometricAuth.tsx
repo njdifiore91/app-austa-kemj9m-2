@@ -5,14 +5,17 @@
  * @license HIPAA-compliant
  */
 
-import React, { useState, useEffect, useCallback } from 'react'; // v18.0.0
-import { startAuthentication, startRegistration } from '@simplewebauthn/browser'; // v7.0.0
-import { MdFingerprint, MdFace, MdError, MdCheckCircle } from 'react-icons/md';
-import { Button, CircularProgress, Alert } from '@material/web/components';
-import { SecurityLogger } from '@logger/security';
+'use client';
 
+import React, { useState, useEffect, useCallback } from 'react';
+import { startAuthentication } from '@simplewebauthn/browser';
+import { Button, CircularProgress, Alert, Box } from '@mui/material';
+import FingerprintIcon from '@mui/icons-material/Fingerprint';
+import FaceIcon from '@mui/icons-material/Face';
+import ErrorIcon from '@mui/icons-material/Error';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import useAuth from '../../hooks/useAuth';
-import { AuthState } from '../../lib/types/auth';
+import { AuthState, MFAMethod } from '../../lib/types/auth';
 
 // Security and clinical environment constants
 const BIOMETRIC_TIMEOUT = 30000;
@@ -77,13 +80,7 @@ const BiometricAuth: React.FC<BiometricAuthProps> = ({
   const [deviceFingerprint, setDeviceFingerprint] = useState<string>('');
 
   // Hooks
-  const { state: authState, verifyBiometric } = useAuth();
-
-  // Security logger instance
-  const securityLogger = new SecurityLogger({
-    component: 'BiometricAuth',
-    hipaaCompliant: true
-  });
+  const auth = useAuth();
 
   /**
    * Checks biometric authentication availability with device support
@@ -102,12 +99,6 @@ const BiometricAuth: React.FC<BiometricAuthProps> = ({
       if (clinicalMode && deviceType) {
         const isClinicalDevice = CLINICAL_DEVICE_TYPES.includes(deviceType);
         setIsAvailable(isSupported && isClinicalDevice);
-        
-        securityLogger.info('Biometric availability checked', {
-          isSupported,
-          isClinicalDevice,
-          deviceType
-        });
       } else {
         setIsAvailable(isSupported);
       }
@@ -118,7 +109,6 @@ const BiometricAuth: React.FC<BiometricAuthProps> = ({
         message: errorMessage,
         timestamp: Date.now()
       });
-      securityLogger.error('Biometric availability check failed', { error: errorMessage });
     }
   }, [clinicalMode, deviceType]);
 
@@ -143,59 +133,46 @@ const BiometricAuth: React.FC<BiometricAuthProps> = ({
           workstationId: 'default',
           emergencyAccess: false
         };
-
-        securityLogger.info('Clinical context validated', clinicalContext);
       }
 
       // Start biometric authentication
       const authOptions = {
-        challenge: new Uint8Array(32),
+        challenge: 'random-challenge-string',
         timeout: BIOMETRIC_TIMEOUT,
         userVerification: 'required' as UserVerificationRequirement,
-        attestation: clinicalMode ? 'direct' : 'none'
+        rpId: window.location.hostname
       };
 
       const credential = await startAuthentication(authOptions);
       
       // Verify with backend
-      const verificationResult = await verifyBiometric({
-        credential,
-        deviceId: deviceFingerprint,
+      await auth.verifyMFA({
+        code: JSON.stringify(credential),
+        method: MFAMethod.BIOMETRIC,
+        verificationId: deviceFingerprint,
         timestamp: Date.now()
       });
 
-      if (verificationResult) {
-        const authResult: AuthResult = {
-          verified: true,
-          deviceId: deviceFingerprint,
-          timestamp: Date.now(),
-          clinicalContext
-        };
+      const authResult: AuthResult = {
+        verified: true,
+        deviceId: deviceFingerprint,
+        timestamp: Date.now(),
+        clinicalContext
+      };
 
-        securityLogger.info('Biometric authentication successful', {
-          deviceId: deviceFingerprint,
-          clinicalMode
-        });
-
-        onSuccess(authResult);
-      }
+      onSuccess(authResult);
     } catch (error) {
       setAttemptCount(prev => prev + 1);
       
       const biometricError: BiometricError = {
-        code: error instanceof Error ? error.code || 'BIOMETRIC_ERROR' : 'BIOMETRIC_ERROR',
+        code: 'BIOMETRIC_ERROR',
         message: error instanceof Error ? error.message : 'Authentication failed',
-        details: error instanceof Error ? error.details : undefined,
+        details: {},
         timestamp: Date.now()
       };
 
       setError(biometricError);
       onError(biometricError);
-      
-      securityLogger.error('Biometric authentication failed', {
-        error: biometricError,
-        attemptCount: attemptCount + 1
-      });
     } finally {
       setIsLoading(false);
     }
@@ -216,8 +193,6 @@ const BiometricAuth: React.FC<BiometricAuthProps> = ({
         timestamp: Date.now()
       };
 
-      securityLogger.warn('Emergency override initiated', emergencyContext);
-      
       setTimeout(() => {
         onEmergencyOverride(emergencyContext);
       }, EMERGENCY_TIMEOUT);
@@ -233,64 +208,56 @@ const BiometricAuth: React.FC<BiometricAuthProps> = ({
 
   // Render component with accessibility support
   return (
-    <div 
-      className="biometric-auth-container"
+    <Box 
       role="region"
       aria-label="Biometric Authentication"
+      sx={{ mb: 3 }}
     >
       {error && (
         <Alert 
           severity="error"
           onClose={() => setError(null)}
-          aria-live="polite"
+          sx={{ mb: 2 }}
         >
-          <MdError /> {error.message}
+          <ErrorIcon sx={{ mr: 1 }} /> {error.message}
         </Alert>
       )}
 
-      <div className="biometric-prompt" aria-live="polite">
-        {isLoading ? (
-          <CircularProgress aria-label="Authenticating..." />
-        ) : (
-          <>
-            <Button
-              onClick={handleBiometricAuth}
-              disabled={!isAvailable || isLoading}
-              aria-disabled={!isAvailable || isLoading}
-              startIcon={deviceType?.includes('face') ? <MdFace /> : <MdFingerprint />}
-            >
-              {isAvailable ? 'Use Biometric Authentication' : 'Biometric Auth Not Available'}
-            </Button>
-
-            {clinicalMode && onEmergencyOverride && (
-              <Button
-                variant="outlined"
-                color="warning"
-                onClick={handleEmergencyOverride}
-                disabled={isLoading}
-                aria-label="Emergency Override"
-              >
-                Emergency Override
-              </Button>
-            )}
-          </>
-        )}
-      </div>
-
-      {accessibilityMode && (
-        <div className="accessibility-instructions" aria-live="polite">
-          <p>Press Space or Enter to initiate biometric authentication</p>
-          {error && <p>Authentication failed. Please try again or contact support.</p>}
-        </div>
+      {isAvailable ? (
+        <Button
+          variant="contained"
+          color="primary"
+          startIcon={clinicalMode ? <FaceIcon /> : <FingerprintIcon />}
+          onClick={handleBiometricAuth}
+          disabled={isLoading || attemptCount >= MAX_ATTEMPTS}
+          fullWidth
+          sx={{ mb: 2 }}
+        >
+          {isLoading ? (
+            <CircularProgress size={24} color="inherit" />
+          ) : (
+            'Use Biometric Authentication'
+          )}
+        </Button>
+      ) : (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Biometric authentication is not available on this device.
+        </Alert>
       )}
-    </div>
+
+      {clinicalMode && onEmergencyOverride && (
+        <Button
+          variant="outlined"
+          color="error"
+          onClick={handleEmergencyOverride}
+          disabled={isLoading}
+          fullWidth
+        >
+          Emergency Override
+        </Button>
+      )}
+    </Box>
   );
 };
 
 export default BiometricAuth;
-
-// Named exports for enhanced functionality
-export const useBiometricAuth = () => {
-  const { verifyBiometric } = useAuth();
-  return { verifyBiometric };
-};

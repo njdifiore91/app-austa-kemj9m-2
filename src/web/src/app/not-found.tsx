@@ -3,8 +3,8 @@
 import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation'; // ^13.0.0
 import styled from '@emotion/styled'; // ^11.11.0
-import Button from '../../components/common/Button';
-import { Analytics, AnalyticsCategory, PrivacyLevel } from '../../lib/utils/analytics';
+import Button from '../components/common/Button';
+import { Analytics } from '../lib/utils/analytics';
 
 // Styled components with Material Design 3.0 and WCAG compliance
 const NotFoundContainer = styled.main`
@@ -88,14 +88,14 @@ const NotFound: React.FC = () => {
   const handleReturnHome = () => {
     Analytics.trackEvent({
       name: 'return_home_click',
-      category: AnalyticsCategory.USER_INTERACTION,
+      category: Analytics.AnalyticsCategory.USER_INTERACTION,
       properties: {
         source: '404_page',
         path: window.location.pathname
       },
       timestamp: Date.now(),
       userConsent: true,
-      privacyLevel: PrivacyLevel.PUBLIC,
+      privacyLevel: Analytics.PrivacyLevel.PUBLIC,
       auditInfo: {
         eventId: crypto.randomUUID(),
         timestamp: Date.now(),
@@ -106,6 +106,32 @@ const NotFound: React.FC = () => {
     }).catch(console.error);
 
     router.push('/');
+  };
+
+  // Handle retry with analytics
+  const handleRetry = async (): Promise<void> => {
+    try {
+      await Analytics.trackEvent({
+        name: 'not_found_retry',
+        category: Analytics.AnalyticsCategory.USER_INTERACTION,
+        properties: {
+          path: window.location.pathname,
+          timestamp: Date.now()
+        },
+        timestamp: Date.now(),
+        userConsent: true,
+        privacyLevel: Analytics.PrivacyLevel.PUBLIC,
+        auditInfo: {
+          eventId: `not_found_${Date.now()}`,
+          timestamp: Date.now(),
+          userId: 'system',
+          ipAddress: 'internal',
+          actionType: 'navigation'
+        }
+      });
+    } catch (error) {
+      console.error('Failed to track not found retry:', error);
+    }
   };
 
   return (

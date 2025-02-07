@@ -1,3 +1,5 @@
+'use client';
+
 import { createTheme, Theme, ThemeOptions } from '@mui/material'; // @mui/material ^5.14.0
 
 // Extend the default theme types to include custom properties
@@ -133,8 +135,20 @@ const breakpoints = {
   },
 };
 
-// Healthcare-optimized spacing system
-const spacing = (factor: number) => `${factor * 8}px`;
+// Spacing scale (in pixels)
+export const themeSpacing = {
+  xxs: 2,
+  xs: 4,
+  sm: 8,
+  md: 16,
+  lg: 24,
+  xl: 32,
+  xxl: 48,
+  xxxl: 64
+};
+
+// Re-export as spacing for backward compatibility
+export const spacing = themeSpacing;
 
 // Medical interface shape configurations
 const shape = {
@@ -186,8 +200,8 @@ const components = {
   MuiButton: {
     styleOverrides: {
       root: {
-        borderRadius: shape.buttonRadius,
-        textTransform: 'none',
+        borderRadius: `${shape.buttonRadius}px`,
+        textTransform: 'none' as const,
         fontWeight: typography.fontWeightMedium,
       },
       containedPrimary: {
@@ -205,7 +219,7 @@ const components = {
   MuiCard: {
     styleOverrides: {
       root: {
-        borderRadius: shape.clinicalCard,
+        borderRadius: `${shape.clinicalCard}px`,
         boxShadow: shadows.clinical,
       },
     },
@@ -214,7 +228,7 @@ const components = {
     styleOverrides: {
       root: {
         '& .MuiOutlinedInput-root': {
-          borderRadius: shape.borderRadiusSmall,
+          borderRadius: `${shape.borderRadiusSmall}px`,
         },
       },
     },
@@ -225,7 +239,7 @@ const components = {
         backgroundColor: palette.text.primary,
         fontSize: '0.875rem',
         padding: '8px 16px',
-        borderRadius: shape.borderRadiusSmall,
+        borderRadius: `${shape.borderRadiusSmall}px`,
       },
     },
   },
@@ -236,13 +250,38 @@ const themeOptions: ThemeOptions = {
   palette,
   typography,
   breakpoints,
-  spacing,
   shape,
   components,
-  shadows: defaultShadows,
+  shadows: [
+    'none',
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+    shadows.clinical,
+  ] as const,
 };
 
-export const theme: Theme = createTheme(themeOptions);
+export const theme = createTheme(themeOptions);
 
 // Export individual theme sections for granular access
 export const {

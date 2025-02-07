@@ -7,7 +7,7 @@
  */
 
 import { config } from 'dotenv'; // v16.3.1
-import { HttpStatus } from '../../../shared/constants/http-status';
+import { HttpStatus } from '@shared/constants/http-status';
 
 // Load environment variables
 config();
@@ -56,12 +56,12 @@ export const kongConfig = {
     // Authentication Service
     auth: {
       name: 'auth-service',
-      url: 'http://auth-service:3000',
+      url: process.env.NODE_ENV === 'development' ? 'http://localhost:3001' : 'http://auth-service:8000',
       protocol: 'http',
-      connect_timeout: 60000,
-      write_timeout: 60000,
-      read_timeout: 60000,
-      retries: 5,
+      connect_timeout: 5000,  // 5 seconds
+      write_timeout: 10000,   // 10 seconds
+      read_timeout: 10000,    // 10 seconds
+      retries: 1,  // Reduce retries in development
       health_checks: {
         active: {
           healthy: { interval: 5, successes: 2 },
@@ -73,7 +73,7 @@ export const kongConfig = {
     // Virtual Care Service
     'virtual-care': {
       name: 'virtual-care-service',
-      url: 'http://virtual-care-service:3000',
+      url: 'http://virtual-care-service:8000',
       protocol: 'http',
       connect_timeout: 120000,
       write_timeout: 120000,
@@ -90,7 +90,7 @@ export const kongConfig = {
     // Health Records Service
     'health-records': {
       name: 'health-records-service',
-      url: 'http://health-records-service:3000',
+      url: 'http://health-records-service:8000',
       protocol: 'http',
       connect_timeout: 90000,
       write_timeout: 90000,
@@ -107,7 +107,7 @@ export const kongConfig = {
     // Insurance Claims Service
     claims: {
       name: 'claims-service',
-      url: 'http://claims-service:3000',
+      url: 'http://claims-service:8000',
       protocol: 'http',
       connect_timeout: 60000,
       write_timeout: 60000,
@@ -126,10 +126,10 @@ export const kongConfig = {
     // Authentication Routes
     auth: {
       paths: [`/api/${API_VERSION}/auth`],
-      methods: ['GET', 'POST', 'PUT', 'DELETE'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       strip_path: true,
       preserve_host: false,
-      protocols: ['https'],
+      protocols: process.env.NODE_ENV === 'development' ? ['http'] : ['https'],
       regex_priority: 100,
       https_redirect_status_code: 308
     },
@@ -177,23 +177,37 @@ export const kongConfig = {
           'https://*.austa-health.com',
           'https://admin.austa-health.com',
           'capacitor://localhost',
-          'http://localhost:3000'
+          'http://localhost:3000',
+          'http://localhost:8000',
+          'http://127.0.0.1:3000',
+          'http://127.0.0.1:8000'
         ],
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH', 'HEAD'],
         headers: [
           'Authorization',
           'Content-Type',
           'X-Request-ID',
           'X-API-Key',
-          'X-HIPAA-Audit-ID'
+          'X-HIPAA-Audit-ID',
+          'X-Security-Version',
+          'X-Device-Fingerprint',
+          'Accept',
+          'Origin',
+          'User-Agent',
+          'Referer',
+          'Sec-Fetch-Mode',
+          'Sec-Fetch-Site',
+          'Sec-Fetch-Dest'
         ],
         exposed_headers: [
           'X-Auth-Token',
           'X-Request-ID',
-          'X-HIPAA-Audit-ID'
+          'X-HIPAA-Audit-ID',
+          'X-Security-Version'
         ],
         credentials: true,
-        max_age: 3600
+        max_age: 3600,
+        preflight_continue: false
       }
     },
 

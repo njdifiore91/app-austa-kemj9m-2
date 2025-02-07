@@ -14,8 +14,10 @@ export const AUTH_ROUTES = {
   FORGOT_PASSWORD: '/auth/forgot-password',
   RESET_PASSWORD: '/auth/reset-password/[token]',
   VERIFY_EMAIL: '/auth/verify-email/[token]',
+  VERIFY_ACCOUNT: '/verify-account',
   MFA: '/auth/mfa',
-  LOGOUT: '/auth/logout'
+  LOGOUT: '/auth/logout',
+  VERIFY_EMAIL_REQUIRED: '/verify-email-required'
 } as const;
 
 /**

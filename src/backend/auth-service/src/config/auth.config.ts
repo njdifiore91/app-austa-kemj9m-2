@@ -5,8 +5,11 @@
  */
 
 import { config as dotenvConfig } from 'dotenv';
-import { ErrorCode } from '../../../shared/constants/error-codes';
-import { HttpStatus } from '../../../shared/constants/http-status';
+import { ErrorCode } from '@shared/constants/error-codes';
+import { HttpStatus } from '@shared/constants/http-status';
+import { Algorithm } from 'jsonwebtoken';
+import crypto from 'crypto';
+import fs from 'fs';
 
 /**
  * Interface defining comprehensive HIPAA-compliant authentication configuration
@@ -16,10 +19,12 @@ export interface AuthConfiguration {
     secret: string;
     publicKey: string;
     privateKey: string;
-    expiresIn: string;
+    expiresIn: number;
     refreshExpiresIn: string;
     issuer: string;
-    algorithm: string;
+    audience: string[];
+    algorithm: Algorithm;
+    keyId?: string;
     rotationSchedule: string;
   };
   oauth2: {
@@ -43,10 +48,15 @@ export interface AuthConfiguration {
     path: string;
     encryptionKey: string;
     signatureKey: string;
+    maxConcurrent: number;
+    inactivityTimeout: number;
   };
   security: {
-    maxLoginAttempts: number;
+    maxFailedLogins: number;
     lockoutDuration: number;
+    passwordMinLength: number;
+    requireMFA: boolean;
+    maxDevicesPerUser: number;
     passwordPolicy: {
       minLength: number;
       requireUppercase: boolean;
@@ -101,11 +111,11 @@ export interface AuthConfiguration {
  * Default JWT configuration with security best practices
  */
 const JWT_DEFAULTS = {
-  expiresIn: '15m',
+  expiresIn: 3600,
   refreshExpiresIn: '7d',
-  algorithm: 'RS256',
+  algorithm: 'HS256',
   issuer: 'austa-auth-service',
-  rotationSchedule: '7d'
+  rotationSchedule: '0 0 * * *'
 } as const;
 
 /**
@@ -156,6 +166,23 @@ const HIPAA_DEFAULTS = {
 } as const;
 
 /**
+ * Reads a secret from a file if the environment variable ends with _FILE
+ * @param envVar The environment variable name
+ * @returns The secret value
+ */
+function getSecret(envVar: string): string | undefined {
+  const fileEnvVar = `${envVar}_FILE`;
+  if (process.env[fileEnvVar]) {
+    try {
+      return fs.readFileSync(process.env[fileEnvVar]!, 'utf8').trim();
+    } catch (error) {
+      throw new Error(`Failed to read secret from file ${process.env[fileEnvVar]}`);
+    }
+  }
+  return process.env[envVar];
+}
+
+/**
  * Loads and validates authentication configuration with enhanced security checks
  * @returns {AuthConfiguration} Validated authentication configuration
  * @throws {Error} If required configuration is missing or invalid
@@ -163,7 +190,7 @@ const HIPAA_DEFAULTS = {
 function loadConfig(): AuthConfiguration {
   dotenvConfig();
 
-  // Validate required environment variables
+  // Validate required environment variables and their file alternatives
   const requiredEnvVars = [
     'JWT_PRIVATE_KEY',
     'JWT_PUBLIC_KEY',
@@ -176,9 +203,12 @@ function loadConfig(): AuthConfiguration {
   ];
 
   for (const envVar of requiredEnvVars) {
-    if (!process.env[envVar]) {
-      throw new Error(`Missing required environment variable: ${envVar}`);
+    const value = getSecret(envVar);
+    if (!value) {
+      throw new Error(`Missing required environment variable: ${envVar} or ${envVar}_FILE`);
     }
+    // Set the actual environment variable if it was read from a file
+    process.env[envVar] = value;
   }
 
   // Parse Redis cluster nodes from environment
@@ -192,10 +222,12 @@ function loadConfig(): AuthConfiguration {
       secret: process.env.JWT_SECRET!,
       publicKey: process.env.JWT_PUBLIC_KEY!,
       privateKey: process.env.JWT_PRIVATE_KEY!,
-      expiresIn: process.env.JWT_EXPIRES_IN || JWT_DEFAULTS.expiresIn,
+      expiresIn: parseInt(process.env.JWT_EXPIRES_IN || JWT_DEFAULTS.expiresIn.toString(), 10),
       refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || JWT_DEFAULTS.refreshExpiresIn,
       issuer: process.env.JWT_ISSUER || JWT_DEFAULTS.issuer,
-      algorithm: process.env.JWT_ALGORITHM || JWT_DEFAULTS.algorithm,
+      audience: (process.env.JWT_AUDIENCE || 'virtual-care-service').split(','),
+      algorithm: (process.env.JWT_ALGORITHM || JWT_DEFAULTS.algorithm) as Algorithm,
+      keyId: process.env.JWT_KEY_ID,
       rotationSchedule: process.env.JWT_ROTATION_SCHEDULE || JWT_DEFAULTS.rotationSchedule
     },
     oauth2: {
@@ -210,7 +242,7 @@ function loadConfig(): AuthConfiguration {
     },
     session: {
       name: process.env.SESSION_NAME || SESSION_DEFAULTS.name,
-      secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+      secret: getSecret('SESSION_SECRET') || crypto.randomBytes(32).toString('hex'),
       maxAge: parseInt(process.env.SESSION_MAX_AGE || SESSION_DEFAULTS.maxAge.toString(), 10),
       secure: process.env.SESSION_SECURE !== 'false',
       httpOnly: process.env.SESSION_HTTP_ONLY !== 'false',
@@ -218,11 +250,16 @@ function loadConfig(): AuthConfiguration {
       domain: process.env.SESSION_DOMAIN || SESSION_DEFAULTS.domain,
       path: process.env.SESSION_PATH || SESSION_DEFAULTS.path,
       encryptionKey: process.env.SESSION_ENCRYPTION_KEY!,
-      signatureKey: process.env.SESSION_SIGNATURE_KEY!
+      signatureKey: process.env.SESSION_SIGNATURE_KEY!,
+      maxConcurrent: parseInt(process.env.MAX_CONCURRENT_SESSIONS || '5', 10),
+      inactivityTimeout: parseInt(process.env.SESSION_INACTIVITY_TIMEOUT || '30', 10)
     },
     security: {
-      maxLoginAttempts: parseInt(process.env.MAX_LOGIN_ATTEMPTS || SECURITY_DEFAULTS.maxLoginAttempts.toString(), 10),
-      lockoutDuration: parseInt(process.env.LOCKOUT_DURATION || SECURITY_DEFAULTS.lockoutDuration.toString(), 10),
+      maxFailedLogins: parseInt(process.env.MAX_FAILED_LOGINS || SECURITY_DEFAULTS.maxLoginAttempts.toString(), 10),
+      lockoutDuration: parseInt(process.env.ACCOUNT_LOCKOUT_DURATION || SECURITY_DEFAULTS.lockoutDuration.toString(), 10),
+      passwordMinLength: parseInt(process.env.PASSWORD_MIN_LENGTH || SECURITY_DEFAULTS.passwordPolicy.minLength.toString(), 10),
+      requireMFA: process.env.REQUIRE_MFA === 'true',
+      maxDevicesPerUser: parseInt(process.env.MAX_DEVICES_PER_USER || '5', 10),
       passwordPolicy: {
         minLength: parseInt(process.env.PASSWORD_MIN_LENGTH || SECURITY_DEFAULTS.passwordPolicy.minLength.toString(), 10),
         requireUppercase: process.env.PASSWORD_REQUIRE_UPPERCASE !== 'false',

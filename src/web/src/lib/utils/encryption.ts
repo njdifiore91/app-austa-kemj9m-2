@@ -174,17 +174,11 @@ export class WebEncryptionService {
   private config: EncryptionConfig;
   private currentKey: CryptoKey | null = null;
   private sensitivePatterns: Map<string, SensitiveFieldPattern>;
-  private readonly worker: Worker;
 
   constructor(config: EncryptionConfig = DEFAULT_CONFIG) {
     this.config = config;
     this.sensitivePatterns = SENSITIVE_PATTERNS;
     
-    // Initialize Web Worker for CPU-intensive operations
-    this.worker = new Worker(
-      new URL('./encryption.worker.ts', import.meta.url)
-    );
-
     // Initialize encryption key
     this.initializeKey();
   }

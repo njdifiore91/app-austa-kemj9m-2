@@ -84,7 +84,7 @@ spec:
           service:
             name: api-gateway
             port:
-              number: 3000
+              number: 8000
               
   - host: auth.austa-superapp.com
     http:

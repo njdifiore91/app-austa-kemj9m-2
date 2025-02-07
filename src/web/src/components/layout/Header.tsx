@@ -1,6 +1,13 @@
+'use client';
+
 import React, { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/router';
+import { useRouter } from 'next/navigation';
+import Image from 'next/image';
+import { css } from '@emotion/react';
 import styled from '@emotion/styled';
+import { useAuthContext } from '../../contexts/AuthContext';
+import useAuth from '../../hooks/useAuth';
+import { Global } from '@emotion/react';
 
 // Internal imports
 import { 
@@ -12,7 +19,6 @@ import {
   MARKETPLACE_ROUTES,
   EMERGENCY_ROUTES 
 } from '../../lib/constants/routes';
-import useAuth from '../../hooks/useAuth';
 
 // Constants
 const MOBILE_BREAKPOINT = 768;
@@ -31,41 +37,61 @@ interface HeaderProps {
   clinicalEnvironment?: ClinicalEnvironmentType;
 }
 
+// Base styles
+const headerStyles = {
+  base: css`
+    height: ${HEADER_HEIGHT}px;
+    width: 100%;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    transition: all 0.3s ease;
+    background: var(--color-surface-primary);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+
+    @media (max-width: ${MOBILE_BREAKPOINT}px) {
+      padding: 0 16px;
+    }
+  `,
+  transparent: css`
+    background: transparent;
+    box-shadow: none;
+  `,
+  emergency: css`
+    background: var(--color-error-100);
+  `,
+  operatingRoom: css`
+    background: var(--color-surface-sterile);
+  `,
+  emergencyRoom: css`
+    background: var(--color-surface-emergency);
+  `
+};
+
 // Styled Components
 const StyledHeader = styled.header<{
   transparent?: boolean;
   emergencyMode?: boolean;
   clinicalEnvironment: ClinicalEnvironmentType;
 }>`
-  height: ${HEADER_HEIGHT}px;
-  width: 100%;
-  position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  transition: all 0.3s ease;
-  background: ${({ transparent, emergencyMode, clinicalEnvironment }) => {
-    if (emergencyMode) return 'var(--color-error-100)';
-    if (transparent) return 'transparent';
+  ${headerStyles.base};
+  ${({ transparent }) => transparent && headerStyles.transparent};
+  ${({ emergencyMode }) => emergencyMode && headerStyles.emergency};
+  ${({ clinicalEnvironment }) => {
     switch (clinicalEnvironment) {
       case 'OPERATING_ROOM':
-        return 'var(--color-surface-sterile)';
+        return headerStyles.operatingRoom;
       case 'EMERGENCY':
-        return 'var(--color-surface-emergency)';
+        return headerStyles.emergencyRoom;
       default:
-        return 'var(--color-surface-primary)';
+        return '';
     }
-  }};
-  box-shadow: ${({ transparent }) => 
-    transparent ? 'none' : '0 2px 4px rgba(0, 0, 0, 0.1)'};
-
-  @media (max-width: ${MOBILE_BREAKPOINT}px) {
-    padding: 0 16px;
-  }
+  }}
 `;
 
 const Logo = styled.div`
@@ -73,6 +99,8 @@ const Logo = styled.div`
   height: ${CLINICAL_TOUCH_TARGET}px;
   display: flex;
   align-items: center;
+  cursor: pointer;
+  user-select: none;
 `;
 
 const Navigation = styled.nav`
@@ -96,6 +124,7 @@ const NavItem = styled.a<{ active?: boolean }>`
   cursor: pointer;
   transition: all 0.2s ease;
   border-radius: 8px;
+  text-decoration: none;
 
   &:hover {
     background: var(--color-surface-hover);
@@ -124,6 +153,12 @@ const EmergencyButton = styled.button`
   }
 `;
 
+const AuthSection = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 16px;
+`;
+
 const Header: React.FC<HeaderProps> = ({
   transparent = false,
   className,
@@ -131,8 +166,14 @@ const Header: React.FC<HeaderProps> = ({
   clinicalEnvironment = 'STANDARD'
 }) => {
   const router = useRouter();
-  const { user, secureLogout, sessionTimeout } = useAuth();
+  const auth = useAuthContext();
+  const { logout } = useAuth();
   const [isScrolled, setIsScrolled] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Handle scroll transparency
   useEffect(() => {
@@ -145,109 +186,155 @@ const Header: React.FC<HeaderProps> = ({
   }, []);
 
   // Handle secure logout with audit logging
-  const handleSecureLogout = useCallback(async () => {
+  const handleLogout = useCallback(async () => {
     try {
-      await secureLogout();
+      await logout();
       router.push(AUTH_ROUTES.LOGIN);
     } catch (error) {
       console.error('Logout failed:', error);
     }
-  }, [secureLogout, router]);
+  }, [logout, router]);
 
   // Handle emergency navigation with priority
   const handleEmergencyNavigation = useCallback((route: string, priority: EmergencyPriority) => {
-    router.push({
-      pathname: route,
-      query: { priority, timestamp: Date.now() }
-    });
+    router.push(route + `?priority=${priority}&timestamp=${Date.now()}`);
   }, [router]);
 
   // Session timeout warning
   useEffect(() => {
-    if (sessionTimeout && sessionTimeout - Date.now() < EMERGENCY_TIMEOUT) {
-      // Show warning notification
+    const sessionTimeoutWarning = setTimeout(() => {
+      if (auth.state === 'AUTHENTICATED') {
+        // Show warning notification
+      }
+    }, EMERGENCY_TIMEOUT);
+
+    return () => clearTimeout(sessionTimeoutWarning);
+  }, [auth.state]);
+
+  const isActive = (path: string) => {
+    try {
+      // Use window.location for client-side path checking
+      return window.location.pathname.startsWith(path);
+    } catch {
+      return false;
     }
-  }, [sessionTimeout]);
+  };
 
   return (
-    <StyledHeader
-      transparent={transparent && !isScrolled}
-      emergencyMode={emergencyMode}
-      clinicalEnvironment={clinicalEnvironment}
-      className={className}
-      role="banner"
-      aria-label="Main header"
-    >
-      <Logo>
-        <img 
-          src="/assets/logo.svg" 
-          alt="AUSTA SuperApp" 
-          height={32} 
-        />
-      </Logo>
+    <>
+      <Global
+        styles={css`
+          :root {
+            --color-surface-primary: #ffffff;
+            --color-surface-sterile: #f5f5f5;
+            --color-surface-emergency: #fff3f3;
+            --color-error-100: #ffebee;
+            --color-text-primary: #1a1a1a;
+            --color-surface-hover: rgba(0, 0, 0, 0.04);
+          }
+        `}
+      />
+      {mounted && (
+        <StyledHeader
+          transparent={transparent && !isScrolled}
+          emergencyMode={emergencyMode}
+          clinicalEnvironment={clinicalEnvironment}
+          className={className}
+          role="banner"
+          aria-label="Main header"
+          suppressHydrationWarning
+        >
+          <Logo onClick={() => router.push('/')} suppressHydrationWarning>
+            <Image 
+              src="/logo.svg"
+              alt="AUSTA SuperApp"
+              width={120}
+              height={32}
+              priority
+            />
+          </Logo>
 
-      <Navigation role="navigation">
-        <NavItem 
-          href={DASHBOARD_ROUTES.HOME}
-          active={router.pathname.startsWith('/dashboard')}
-        >
-          Dashboard
-        </NavItem>
-        <NavItem 
-          href={VIRTUAL_CARE_ROUTES.HOME}
-          active={router.pathname.startsWith('/virtual-care')}
-        >
-          Virtual Care
-        </NavItem>
-        <NavItem 
-          href={HEALTH_RECORDS_ROUTES.HOME}
-          active={router.pathname.startsWith('/health-records')}
-        >
-          Health Records
-        </NavItem>
-        <NavItem 
-          href={CLAIMS_ROUTES.HOME}
-          active={router.pathname.startsWith('/claims')}
-        >
-          Claims
-        </NavItem>
-        <NavItem 
-          href={MARKETPLACE_ROUTES.HOME}
-          active={router.pathname.startsWith('/marketplace')}
-        >
-          Marketplace
-        </NavItem>
-      </Navigation>
+          {auth.state === 'AUTHENTICATED' ? (
+            <>
+              <Navigation role="navigation">
+                <NavItem 
+                  href={DASHBOARD_ROUTES.HOME}
+                  active={isActive('/dashboard')}
+                >
+                  Dashboard
+                </NavItem>
+                <NavItem 
+                  href={VIRTUAL_CARE_ROUTES.HOME}
+                  active={isActive('/virtual-care')}
+                >
+                  Virtual Care
+                </NavItem>
+                <NavItem 
+                  href={HEALTH_RECORDS_ROUTES.HOME}
+                  active={isActive('/health-records')}
+                >
+                  Health Records
+                </NavItem>
+                <NavItem 
+                  href={CLAIMS_ROUTES.HOME}
+                  active={isActive('/claims')}
+                >
+                  Claims
+                </NavItem>
+                <NavItem 
+                  href={MARKETPLACE_ROUTES.HOME}
+                  active={isActive('/marketplace')}
+                >
+                  Marketplace
+                </NavItem>
+              </Navigation>
 
-      <UserSection>
-        {emergencyMode && (
-          <EmergencyButton
-            onClick={() => handleEmergencyNavigation(EMERGENCY_ROUTES.HOME, 'HIGH')}
-            aria-label="Emergency access"
-          >
-            Emergency Mode
-          </EmergencyButton>
-        )}
-        
-        {user && (
-          <>
-            <NavItem 
-              href={DASHBOARD_ROUTES.PROFILE}
-              aria-label="User profile"
-            >
-              {user.profile.firstName} {user.profile.lastName}
-            </NavItem>
-            <NavItem 
-              onClick={handleSecureLogout}
-              role="button"
-              aria-label="Logout"
-            >
-              Logout
-            </NavItem>
-          </>
-        )}
-      </UserSection>
-    </StyledHeader>
+              <UserSection>
+                {emergencyMode && (
+                  <EmergencyButton
+                    onClick={() => handleEmergencyNavigation(EMERGENCY_ROUTES.HOME, 'HIGH')}
+                    aria-label="Emergency access"
+                  >
+                    Emergency Mode
+                  </EmergencyButton>
+                )}
+                
+                  <>
+                    <NavItem 
+                      href={DASHBOARD_ROUTES.PROFILE}
+                      aria-label="User profile"
+                    >
+                      {auth.user?.profile?.firstName} {auth.user?.profile?.lastName}
+                    </NavItem>
+                    <NavItem 
+                      onClick={handleLogout}
+                      role="button"
+                      aria-label="Logout"
+                    >
+                      Logout
+                    </NavItem>
+                  </>
+              </UserSection>
+            </>
+          ) : (
+            <AuthSection>
+              <NavItem 
+                href={AUTH_ROUTES.LOGIN}
+                active={isActive('/auth/login')}
+              >
+                Login
+              </NavItem>
+              <NavItem 
+                href={AUTH_ROUTES.REGISTER}
+                active={isActive('/auth/register')}
+              >
+                Register
+              </NavItem>
+            </AuthSection>
+          )}
+        </StyledHeader>
+      )}
+    </>
   );
 };
 

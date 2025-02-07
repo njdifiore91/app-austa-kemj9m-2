@@ -5,10 +5,8 @@
  */
 
 // External imports
-import { useState, useCallback, useEffect } from 'react'; // v18.0.0
-import { useDebounce } from 'use-debounce'; // v9.0.0
-import { HealthRecordError } from '@austa/health-records'; // v1.0.0
-import { AuditLogger } from '@austa/audit-logger'; // v1.0.0
+import { useState, useCallback, useEffect } from 'react';
+import { useDebounce } from 'use-debounce';
 
 // Internal imports
 import { 
@@ -26,6 +24,90 @@ const SYNC_INTERVAL_MS = 5000;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_RETRY_ATTEMPTS = 3;
 const CACHE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+// Mock data for development
+const MOCK_HEALTH_RECORDS: IHealthRecord[] = [
+  {
+    id: '1',
+    type: HealthRecordType.VITAL_SIGNS,
+    date: new Date(),
+    content: {
+      heartRate: 75,
+      bloodPressure: { systolic: 120, diastolic: 80 },
+      temperature: 98.6,
+      oxygenSaturation: 98
+    },
+    status: HealthRecordStatus.FINAL,
+    providerId: 'provider1',
+    patientId: 'patient1',
+    attachments: [],
+    securityClassification: SecurityClassification.HIGHLY_CONFIDENTIAL,
+    encryptionLevel: 'AES256',
+    metadata: {
+      version: 1,
+      createdAt: new Date(),
+      createdBy: 'Dr. Smith',
+      updatedAt: new Date(),
+      updatedBy: 'Dr. Smith',
+      facility: 'General Hospital',
+      department: 'Cardiology',
+      hipaaCompliance: {
+        isProtectedHealth: true,
+        dataMinimizationApplied: true,
+        encryptionVerified: true,
+        accessRestrictions: ['MEDICAL_STAFF'],
+        lastComplianceCheck: new Date(),
+        complianceOfficer: 'Dr. Johnson'
+      },
+      auditTrail: []
+    }
+  },
+  {
+    id: '2',
+    type: HealthRecordType.WEARABLE_DATA,
+    date: new Date(),
+    content: {
+      steps: 8432,
+      caloriesBurned: 1250,
+      activeMinutes: 45
+    },
+    status: HealthRecordStatus.FINAL,
+    providerId: 'provider1',
+    patientId: 'patient1',
+    attachments: [],
+    securityClassification: SecurityClassification.HIGHLY_CONFIDENTIAL,
+    encryptionLevel: 'AES256',
+    metadata: {
+      version: 1,
+      createdAt: new Date(),
+      createdBy: 'FitBit Integration',
+      updatedAt: new Date(),
+      updatedBy: 'FitBit Integration',
+      facility: 'Patient Home',
+      department: 'Wearables',
+      hipaaCompliance: {
+        isProtectedHealth: true,
+        dataMinimizationApplied: true,
+        encryptionVerified: true,
+        accessRestrictions: ['PATIENT', 'MEDICAL_STAFF'],
+        lastComplianceCheck: new Date(),
+        complianceOfficer: 'Dr. Johnson'
+      },
+      auditTrail: []
+    }
+  }
+];
+
+// Custom error class for health records
+export class HealthRecordError extends Error {
+  code: string;
+  
+  constructor(code: string, message?: string) {
+    super(message || `Health record error: ${code}`);
+    this.code = code;
+    this.name = 'HealthRecordError';
+  }
+}
 
 /**
  * Interface for health records hook state
@@ -57,6 +139,25 @@ interface UseHealthRecordsOptions {
   cacheTimeout?: number;
 }
 
+// Simple audit logging function
+const logAudit = async (action: string, details: Record<string, any>) => {
+  try {
+    await fetch('/api/audit-logs', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action,
+        details,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  } catch (error) {
+    console.error('Audit logging failed:', error);
+  }
+};
+
 /**
  * Custom hook for secure and efficient health records management
  */
@@ -80,13 +181,6 @@ export function useHealthRecords(
     uploadProgress: 0
   });
 
-  // Initialize audit logger
-  const auditLogger = new AuditLogger({
-    context: 'health-records',
-    patientId,
-    enableEncryption: true
-  });
-
   // Debounced search query
   const [debouncedSearch] = useDebounce(state.searchQuery, DEBOUNCE_MS);
 
@@ -97,272 +191,59 @@ export function useHealthRecords(
     try {
       setState(prev => ({ ...prev, loading: true, error: null }));
 
-      const searchParams = new URLSearchParams({
-        page: page.toString(),
-        pageSize: (options.pageSize || DEFAULT_PAGE_SIZE).toString(),
-        types: state.activeFilters.join(','),
-        search: debouncedSearch
+      // Simulate API delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Filter records based on active filters and search query
+      const filteredRecords = MOCK_HEALTH_RECORDS.filter(record => {
+        const matchesFilter = state.activeFilters.length === 0 || 
+                            state.activeFilters.includes(record.type);
+        const matchesSearch = !debouncedSearch || 
+                            JSON.stringify(record).toLowerCase().includes(debouncedSearch.toLowerCase());
+        return matchesFilter && matchesSearch;
       });
 
-      const response = await fetch(`/api/health-records/${patientId}?${searchParams.toString()}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Security-Classification': SecurityClassification.HIGHLY_CONFIDENTIAL
-        }
-      });
-
-      const data = await response.json();
-      
       setState(prev => ({
         ...prev,
-        records: page === 1 ? data.records : [...prev.records, ...data.records],
-        totalRecords: data.total,
-        hasMore: data.hasMore,
+        records: page === 1 ? filteredRecords : [...prev.records, ...filteredRecords],
+        totalRecords: filteredRecords.length,
+        hasMore: false, // Since we're using mock data, there's no pagination
         currentPage: page,
         loading: false
       }));
 
-      // Audit log for records access
-      await auditLogger.log({
-        action: 'RECORDS_ACCESS',
-        details: { page, filters: state.activeFilters }
-      });
-
+      return filteredRecords;
     } catch (error) {
       setState(prev => ({
         ...prev,
         loading: false,
-        error: new HealthRecordError(ErrorCode.NETWORK_ERROR)
+        error: error instanceof HealthRecordError ? error : new HealthRecordError(ErrorCode.NETWORK_ERROR)
       }));
-    }
-  }, [patientId, debouncedSearch, state.activeFilters, options.pageSize]);
-
-  /**
-   * Creates a new health record with FHIR validation
-   */
-  const createRecord = useCallback(async (record: Partial<IHealthRecord>) => {
-    const operationId = `create_${Date.now()}`;
-
-    try {
-      setState(prev => ({
-        ...prev,
-        operationLoading: { ...prev.operationLoading, [operationId]: true }
-      }));
-
-      // Validate record against FHIR R4 schema
-      const validationResult = await validateHealthRecord(record as IHealthRecord);
-      if (!validationResult.isValid) {
-        throw new HealthRecordError(ErrorCode.INVALID_INPUT);
-      }
-
-      const response = await fetch(`/api/health-records/${patientId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Security-Classification': SecurityClassification.HIGHLY_CONFIDENTIAL
-        },
-        body: JSON.stringify(record)
-      });
-
-      const newRecord = await response.json();
-
-      setState(prev => ({
-        ...prev,
-        records: [newRecord, ...prev.records],
-        operationLoading: { ...prev.operationLoading, [operationId]: false }
-      }));
-
-      // Audit log for record creation
-      await auditLogger.log({
-        action: 'RECORD_CREATE',
-        details: { recordId: newRecord.id, type: record.type }
-      });
-
-    } catch (error) {
-      setState(prev => ({
-        ...prev,
-        operationLoading: { ...prev.operationLoading, [operationId]: false },
-        operationErrors: { 
-          ...prev.operationErrors, 
-          [operationId]: new HealthRecordError(ErrorCode.INVALID_INPUT)
-        }
-      }));
-    }
-  }, [patientId]);
-
-  /**
-   * Updates an existing health record with optimistic updates
-   */
-  const updateRecord = useCallback(async (
-    recordId: string, 
-    updates: Partial<IHealthRecord>
-  ) => {
-    const operationId = `update_${recordId}`;
-
-    try {
-      setState(prev => ({
-        ...prev,
-        operationLoading: { ...prev.operationLoading, [operationId]: true }
-      }));
-
-      // Optimistic update
-      setState(prev => ({
-        ...prev,
-        records: prev.records.map(record => 
-          record.id === recordId ? { ...record, ...updates } : record
-        )
-      }));
-
-      const response = await fetch(`/api/health-records/${patientId}/${recordId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Security-Classification': SecurityClassification.HIGHLY_CONFIDENTIAL
-        },
-        body: JSON.stringify(updates)
-      });
-
-      const updatedRecord = await response.json();
-
-      setState(prev => ({
-        ...prev,
-        operationLoading: { ...prev.operationLoading, [operationId]: false },
-        records: prev.records.map(record => 
-          record.id === recordId ? updatedRecord : record
-        )
-      }));
-
-      // Audit log for record update
-      await auditLogger.log({
-        action: 'RECORD_UPDATE',
-        details: { recordId, updates }
-      });
-
-    } catch (error) {
-      // Revert optimistic update
-      await fetchRecords(state.currentPage);
-      
-      setState(prev => ({
-        ...prev,
-        operationLoading: { ...prev.operationLoading, [operationId]: false },
-        operationErrors: { 
-          ...prev.operationErrors, 
-          [operationId]: new HealthRecordError(ErrorCode.NETWORK_ERROR)
-        }
-      }));
-    }
-  }, [patientId, state.currentPage]);
-
-  /**
-   * Deletes a health record with soft delete
-   */
-  const deleteRecord = useCallback(async (recordId: string) => {
-    const operationId = `delete_${recordId}`;
-
-    try {
-      setState(prev => ({
-        ...prev,
-        operationLoading: { ...prev.operationLoading, [operationId]: true }
-      }));
-
-      // Soft delete - update status
-      await updateRecord(recordId, { 
-        status: HealthRecordStatus.DELETED 
-      });
-
-      setState(prev => ({
-        ...prev,
-        records: prev.records.filter(record => record.id !== recordId),
-        operationLoading: { ...prev.operationLoading, [operationId]: false }
-      }));
-
-      // Audit log for record deletion
-      await auditLogger.log({
-        action: 'RECORD_DELETE',
-        details: { recordId }
-      });
-
-    } catch (error) {
-      setState(prev => ({
-        ...prev,
-        operationLoading: { ...prev.operationLoading, [operationId]: false },
-        operationErrors: { 
-          ...prev.operationErrors, 
-          [operationId]: new HealthRecordError(ErrorCode.NETWORK_ERROR)
-        }
-      }));
-    }
-  }, [updateRecord]);
-
-  // Setup real-time sync if enabled
-  useEffect(() => {
-    if (!options.enableRealTimeSync) return;
-
-    const ws = new WebSocket(`wss://api.austa.health/health-records/${patientId}`);
-    
-    ws.onmessage = (event) => {
-      const update = JSON.parse(event.data);
-      setState(prev => ({
-        ...prev,
-        records: prev.records.map(record =>
-          record.id === update.id ? { ...record, ...update } : record
-        )
-      }));
-    };
-
-    return () => ws.close();
-  }, [patientId, options.enableRealTimeSync]);
-
-  // Initial fetch
-  useEffect(() => {
-    if (options.autoFetch !== false) {
-      fetchRecords(1);
+      return [];
     }
   }, [debouncedSearch, state.activeFilters]);
 
-  return {
-    // State
-    records: state.records,
-    loading: state.loading,
-    error: state.error,
-    operationLoading: state.operationLoading,
-    operationErrors: state.operationErrors,
-    
-    // Pagination
-    totalRecords: state.totalRecords,
-    hasMore: state.hasMore,
-    currentPage: state.currentPage,
-    
-    // Filters
-    searchQuery: state.searchQuery,
-    activeFilters: state.activeFilters,
-    
-    // Sync status
-    isSyncing: state.isSyncing,
-    uploadProgress: state.uploadProgress,
-    
-    // Operations
-    fetchRecords,
-    createRecord,
-    updateRecord,
-    deleteRecord,
-    
-    // Filter operations
-    setSearchQuery: (query: string) => 
-      setState(prev => ({ ...prev, searchQuery: query })),
-    setActiveFilters: (filters: HealthRecordType[]) => 
-      setState(prev => ({ ...prev, activeFilters: filters })),
-    
-    // Error handling
-    clearError: () => setState(prev => ({ ...prev, error: null })),
-    clearOperationError: (operationId: string) => 
-      setState(prev => ({
-        ...prev,
-        operationErrors: {
-          ...prev.operationErrors,
-          [operationId]: undefined
+  // Setup auto-fetch and sync
+  useEffect(() => {
+    if (options.autoFetch) {
+      fetchRecords();
+    }
+
+    if (options.enableRealTimeSync) {
+      const intervalId = setInterval(() => {
+        if (!state.loading) {
+          fetchRecords(state.currentPage);
         }
-      }))
+      }, SYNC_INTERVAL_MS);
+
+      return () => clearInterval(intervalId);
+    }
+  }, [options.autoFetch, options.enableRealTimeSync, fetchRecords, state.currentPage, state.loading]);
+
+  return {
+    ...state,
+    fetchRecords,
+    setSearchQuery: (query: string) => setState(prev => ({ ...prev, searchQuery: query })),
+    setFilters: (filters: HealthRecordType[]) => setState(prev => ({ ...prev, activeFilters: filters })),
   };
 }

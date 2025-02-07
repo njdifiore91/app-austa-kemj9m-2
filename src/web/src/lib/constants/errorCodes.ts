@@ -1,166 +1,88 @@
 /**
- * @fileoverview Frontend error codes and handling for AUSTA SuperApp
- * Implements HIPAA-compliant error messages with internationalization and tracking
+ * @fileoverview Error code constants for AUSTA SuperApp frontend
+ * Implements standardized error handling with HIPAA compliance
  * @version 1.0.0
  */
 
-// External imports
-import * as Sentry from '@sentry/browser'; // v7.0.0
-import i18next from 'i18next'; // v23.0.0
-
-// Internal imports
-import { ErrorCategory, ErrorCode } from '../../backend/shared/constants/error-codes';
-
 /**
- * HTTP status codes used in API responses
+ * Error categories for different types of errors
  */
-export enum HTTP_STATUS {
-  OK = 200,
-  CREATED = 201,
-  ACCEPTED = 202,
-  NO_CONTENT = 204,
-  BAD_REQUEST = 400,
-  UNAUTHORIZED = 401,
-  FORBIDDEN = 403,
-  NOT_FOUND = 404,
-  METHOD_NOT_ALLOWED = 405,
-  CONFLICT = 409,
-  UNPROCESSABLE_ENTITY = 422,
-  TOO_MANY_REQUESTS = 429,
-  INTERNAL_SERVER_ERROR = 500,
-  BAD_GATEWAY = 502,
-  SERVICE_UNAVAILABLE = 503,
-  GATEWAY_TIMEOUT = 504
+export enum ErrorCategory {
+  VALIDATION = 'VALIDATION',
+  AUTHENTICATION = 'AUTHENTICATION',
+  AUTHORIZATION = 'AUTHORIZATION',
+  API = 'API',
+  NETWORK = 'NETWORK',
+  SECURITY = 'SECURITY',
+  HIPAA = 'HIPAA',
+  SYSTEM = 'SYSTEM'
 }
 
 /**
- * Re-export error categories and codes for frontend use
+ * Standardized error codes for the application
  */
-export { ErrorCategory, ErrorCode };
+export enum ErrorCode {
+  // Validation errors
+  INVALID_INPUT = 'INVALID_INPUT',
+  REQUIRED_FIELD = 'REQUIRED_FIELD',
+  INVALID_FORMAT = 'INVALID_FORMAT',
+  VALIDATION_FAILED = 'VALIDATION_FAILED',
+
+  // Authentication errors
+  INVALID_CREDENTIALS = 'INVALID_CREDENTIALS',
+  SESSION_EXPIRED = 'SESSION_EXPIRED',
+  MFA_REQUIRED = 'MFA_REQUIRED',
+  INVALID_TOKEN = 'INVALID_TOKEN',
+  ACCOUNT_LOCKED = 'ACCOUNT_LOCKED',
+
+  // Authorization errors
+  UNAUTHORIZED = 'UNAUTHORIZED',
+  INSUFFICIENT_PERMISSIONS = 'INSUFFICIENT_PERMISSIONS',
+  FORBIDDEN = 'FORBIDDEN',
+
+  // API errors
+  API_ERROR = 'API_ERROR',
+  REQUEST_FAILED = 'REQUEST_FAILED',
+  RESPONSE_ERROR = 'RESPONSE_ERROR',
+  RATE_LIMIT_EXCEEDED = 'RATE_LIMIT_EXCEEDED',
+
+  // Network errors
+  NETWORK_ERROR = 'NETWORK_ERROR',
+  CONNECTION_FAILED = 'CONNECTION_FAILED',
+  TIMEOUT = 'TIMEOUT',
+
+  // Security errors
+  SECURITY_ERROR = 'SECURITY_ERROR',
+  ENCRYPTION_FAILED = 'ENCRYPTION_FAILED',
+  DECRYPTION_FAILED = 'DECRYPTION_FAILED',
+  INTEGRITY_CHECK_FAILED = 'INTEGRITY_CHECK_FAILED',
+
+  // HIPAA compliance errors
+  HIPAA_VIOLATION = 'HIPAA_VIOLATION',
+  PHI_EXPOSURE_RISK = 'PHI_EXPOSURE_RISK',
+  AUDIT_LOG_FAILURE = 'AUDIT_LOG_FAILURE',
+
+  // System errors
+  INTERNAL_SERVER_ERROR = 'INTERNAL_SERVER_ERROR',
+  SERVICE_UNAVAILABLE = 'SERVICE_UNAVAILABLE',
+  MAINTENANCE_MODE = 'MAINTENANCE_MODE'
+}
 
 /**
- * HIPAA-compliant error messages with tracking metadata
- * Messages are designed to be user-friendly while maintaining security
- */
-export const ErrorMessage: Record<ErrorCode, {
-  message: string;
-  category: ErrorCategory;
-  httpStatus: HTTP_STATUS;
-  tracking: {
-    severity: 'low' | 'medium' | 'high';
-    shouldReport: boolean;
-  };
-}> = {
-  [ErrorCode.UNAUTHORIZED]: {
-    message: i18next.t('errors.unauthorized'),
-    category: ErrorCategory.AUTHENTICATION,
-    httpStatus: HTTP_STATUS.UNAUTHORIZED,
-    tracking: { severity: 'medium', shouldReport: true }
-  },
-  [ErrorCode.FORBIDDEN]: {
-    message: i18next.t('errors.forbidden'),
-    category: ErrorCategory.AUTHORIZATION,
-    httpStatus: HTTP_STATUS.FORBIDDEN,
-    tracking: { severity: 'medium', shouldReport: true }
-  },
-  [ErrorCode.INVALID_CREDENTIALS]: {
-    message: i18next.t('errors.invalidCredentials'),
-    category: ErrorCategory.AUTHENTICATION,
-    httpStatus: HTTP_STATUS.UNAUTHORIZED,
-    tracking: { severity: 'medium', shouldReport: true }
-  },
-  [ErrorCode.TOKEN_EXPIRED]: {
-    message: i18next.t('errors.sessionExpired'),
-    category: ErrorCategory.AUTHENTICATION,
-    httpStatus: HTTP_STATUS.UNAUTHORIZED,
-    tracking: { severity: 'low', shouldReport: false }
-  },
-  [ErrorCode.INVALID_INPUT]: {
-    message: i18next.t('errors.invalidInput'),
-    category: ErrorCategory.VALIDATION,
-    httpStatus: HTTP_STATUS.BAD_REQUEST,
-    tracking: { severity: 'low', shouldReport: false }
-  },
-  [ErrorCode.RESOURCE_NOT_FOUND]: {
-    message: i18next.t('errors.resourceNotFound'),
-    category: ErrorCategory.BUSINESS_LOGIC,
-    httpStatus: HTTP_STATUS.NOT_FOUND,
-    tracking: { severity: 'low', shouldReport: false }
-  },
-  [ErrorCode.DUPLICATE_RECORD]: {
-    message: i18next.t('errors.duplicateRecord'),
-    category: ErrorCategory.BUSINESS_LOGIC,
-    httpStatus: HTTP_STATUS.CONFLICT,
-    tracking: { severity: 'low', shouldReport: false }
-  },
-  [ErrorCode.DATABASE_ERROR]: {
-    message: i18next.t('errors.systemError'),
-    category: ErrorCategory.DATABASE,
-    httpStatus: HTTP_STATUS.INTERNAL_SERVER_ERROR,
-    tracking: { severity: 'high', shouldReport: true }
-  },
-  [ErrorCode.EXTERNAL_API_ERROR]: {
-    message: i18next.t('errors.serviceError'),
-    category: ErrorCategory.EXTERNAL_SERVICE,
-    httpStatus: HTTP_STATUS.BAD_GATEWAY,
-    tracking: { severity: 'high', shouldReport: true }
-  },
-  [ErrorCode.NETWORK_ERROR]: {
-    message: i18next.t('errors.networkError'),
-    category: ErrorCategory.NETWORK,
-    httpStatus: HTTP_STATUS.SERVICE_UNAVAILABLE,
-    tracking: { severity: 'high', shouldReport: true }
-  },
-  [ErrorCode.INTERNAL_SERVER_ERROR]: {
-    message: i18next.t('errors.systemError'),
-    category: ErrorCategory.SYSTEM,
-    httpStatus: HTTP_STATUS.INTERNAL_SERVER_ERROR,
-    tracking: { severity: 'high', shouldReport: true }
-  },
-  [ErrorCode.SERVICE_UNAVAILABLE]: {
-    message: i18next.t('errors.serviceUnavailable'),
-    category: ErrorCategory.SYSTEM,
-    httpStatus: HTTP_STATUS.SERVICE_UNAVAILABLE,
-    tracking: { severity: 'high', shouldReport: true }
-  },
-  [ErrorCode.HIPAA_VIOLATION]: {
-    message: i18next.t('errors.securityViolation'),
-    category: ErrorCategory.SYSTEM,
-    httpStatus: HTTP_STATUS.FORBIDDEN,
-    tracking: { severity: 'high', shouldReport: true }
-  },
-  [ErrorCode.RATE_LIMIT_EXCEEDED]: {
-    message: i18next.t('errors.tooManyRequests'),
-    category: ErrorCategory.SYSTEM,
-    httpStatus: HTTP_STATUS.TOO_MANY_REQUESTS,
-    tracking: { severity: 'medium', shouldReport: true }
-  }
-};
-
-/**
- * Error tracking utility for monitoring and analytics
+ * Error tracking utility for capturing and reporting errors
  */
 export const ErrorTracker = {
-  /**
-   * Captures and reports errors to monitoring service
-   * @param error - Error object to track
-   * @param context - Additional context for the error
-   */
-  captureError: (error: Error, context?: Sentry.Context): void => {
-    const errorCode = (error as any).code as ErrorCode;
-    const errorInfo = errorCode ? ErrorMessage[errorCode] : null;
-
-    if (errorInfo?.tracking.shouldReport) {
-      Sentry.captureException(error, {
-        level: errorInfo.tracking.severity as Sentry.SeverityLevel,
-        tags: {
-          category: errorInfo.category,
-          httpStatus: errorInfo.httpStatus
-        },
-        contexts: {
-          error: context || {}
-        }
-      });
-    }
+  captureError: (error: Error, context?: Record<string, any>) => {
+    console.error('[ErrorTracker]', {
+      error: {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      },
+      context,
+      timestamp: new Date().toISOString()
+    });
   }
 };
+
+export default ErrorCode;

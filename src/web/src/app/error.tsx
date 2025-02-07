@@ -2,10 +2,10 @@
 
 import React, { useEffect } from 'react';
 import styled from '@emotion/styled';
-import ErrorBoundary from '../../components/common/ErrorBoundary';
-import Button from '../../components/common/Button';
-import { Analytics, PrivacyLevel, AnalyticsCategory } from '../../lib/utils/analytics';
-import { theme } from '../../styles/theme';
+import ErrorBoundary from '../components/common/ErrorBoundary';
+import Button from '../components/common/Button';
+import { Analytics } from '../lib/utils/analytics';
+import { theme } from '../styles/theme';
 
 // Styled components with Material Design 3.0 and WCAG compliance
 const ErrorContainer = styled.div`
@@ -74,7 +74,7 @@ const handleRetry = async (reset: () => void, error: Error): Promise<void> => {
   try {
     await Analytics.trackEvent({
       name: 'error_retry_attempt',
-      category: AnalyticsCategory.SYSTEM_PERFORMANCE,
+      category: Analytics.AnalyticsCategory.SYSTEM_PERFORMANCE,
       properties: {
         error_type: error.name,
         error_sanitized: true,
@@ -82,7 +82,7 @@ const handleRetry = async (reset: () => void, error: Error): Promise<void> => {
       },
       timestamp: Date.now(),
       userConsent: true,
-      privacyLevel: PrivacyLevel.INTERNAL,
+      privacyLevel: Analytics.PrivacyLevel.INTERNAL,
       auditInfo: {
         eventId: `error_retry_${Date.now()}`,
         timestamp: Date.now(),

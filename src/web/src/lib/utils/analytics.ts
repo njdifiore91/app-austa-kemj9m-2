@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Analytics utility for AUSTA SuperApp
+ * Implements HIPAA-compliant tracking with privacy controls
+ */
+
 import mixpanel from 'mixpanel-browser'; // v2.47.0
 import { datadogRum } from '@datadog/browser-rum'; // v4.0.0
 
@@ -19,9 +24,12 @@ export namespace Analytics {
 
   export enum AnalyticsCategory {
     USER_INTERACTION = 'USER_INTERACTION',
-    SYSTEM_PERFORMANCE = 'SYSTEM_PERFORMANCE',
+    PAGE_VIEW = 'PAGE_VIEW',
+    API_CALL = 'API_CALL',
+    ERROR = 'ERROR',
     SECURITY = 'SECURITY',
-    BUSINESS_METRICS = 'BUSINESS_METRICS'
+    PERFORMANCE = 'PERFORMANCE',
+    CLINICAL = 'CLINICAL'
   }
 
   export interface AuditMetadata {
@@ -239,6 +247,20 @@ export namespace Analytics {
     } catch (error) {
       console.error('Performance tracking failed:', error);
       throw new Error('Performance tracking failed');
+    }
+  };
+
+  /**
+   * Analytics service for tracking user interactions
+   */
+  export const track = (eventName: string, event: Partial<AnalyticsEvent>) => {
+    // Only track in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Analytics]', {
+        event: eventName,
+        ...event,
+        timestamp: Date.now()
+      });
     }
   };
 }

@@ -1,23 +1,26 @@
+'use client';
+
 import React from 'react'; // ^18.2.0
 import styled from '@emotion/styled'; // ^11.11.0
 import { Alert, Button, Typography, Box, Theme } from '@mui/material'; // ^5.0.0
-import { Analytics, PrivacyLevel, AnalyticsCategory } from '../../lib/utils/analytics';
+import { Analytics } from '../../lib/utils/analytics';
+import { theme } from '../../styles/theme';
 import Loader from './Loader';
 
 // Styled components for error UI
-const ErrorContainer = styled(Box)<{ theme: Theme }>`
+const ErrorContainer = styled(Box)`
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: ${({ theme }) => theme.spacing(3)};
+  padding: ${theme.spacing(3)};
   text-align: center;
   min-height: 200px;
   width: 100%;
 `;
 
-const ErrorMessage = styled(Typography)<{ theme: Theme }>`
-  margin: ${({ theme }) => theme.spacing(2, 0)};
+const ErrorMessage = styled(Typography)`
+  margin: ${theme.spacing(2, 0)};
 `;
 
 // Interface definitions
@@ -64,38 +67,31 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
     };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
-    // Collect error context
-    this.errorContext = {
-      componentStack: errorInfo.componentStack,
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // Track error with sanitized data
+    Analytics.track('error_boundary', {
+      name: 'error_boundary',
+      category: Analytics.AnalyticsCategory.ERROR,
+      properties: {
+        errorName: error.name,
+        errorMessage: error.message,
+        ...this.errorContext
+      },
       timestamp: Date.now(),
-      url: window.location.href,
-      userAgent: navigator.userAgent,
-      retryCount: this.state.retryCount,
-    };
-
-    // Update state with error info
-    this.setState({
-      errorInfo,
+      userConsent: true,
+      privacyLevel: Analytics.PrivacyLevel.INTERNAL
     });
 
-    // Track error with sanitized data
-    Analytics.trackError(error, this.errorContext).catch(console.error);
-
     // Call optional error handler
-    if (this.props.onError) {
-      this.props.onError(error, errorInfo, this.errorContext);
-    }
+    this.props.onError?.(error, errorInfo, this.errorContext);
 
-    // Attempt recovery if retries are available
-    if (this.state.retryCount < (this.props.retryAttempts || 3)) {
-      this.attemptRecovery();
-    }
-
-    // Log sanitized error in development
-    if (process.env.NODE_ENV === 'development') {
-      console.error('ErrorBoundary caught an error:', error, errorInfo);
-    }
+    // Update state
+    this.setState({
+      hasError: true,
+      error,
+      errorInfo,
+      isRecovering: false
+    });
   }
 
   componentWillUnmount(): void {
@@ -104,46 +100,6 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
     }
     this.errorContext = {};
   }
-
-  attemptRecovery = (): void => {
-    const { retryAttempts = 3, recoveryInterval = 1000 } = this.props;
-    const { retryCount } = this.state;
-
-    if (retryCount < retryAttempts) {
-      this.setState({ isRecovering: true });
-
-      this.recoveryTimeout = setTimeout(() => {
-        this.setState(prevState => ({
-          hasError: false,
-          error: null,
-          errorInfo: null,
-          retryCount: prevState.retryCount + 1,
-          isRecovering: false,
-        }));
-      }, recoveryInterval);
-
-      // Track recovery attempt
-      Analytics.trackEvent({
-        name: 'error_recovery_attempt',
-        category: AnalyticsCategory.SYSTEM_PERFORMANCE,
-        properties: {
-          retryCount: retryCount + 1,
-          maxRetries: retryAttempts,
-          errorType: this.state.error?.name,
-        },
-        timestamp: Date.now(),
-        userConsent: true,
-        privacyLevel: PrivacyLevel.INTERNAL,
-        auditInfo: {
-          eventId: `recovery_${Date.now()}`,
-          timestamp: Date.now(),
-          userId: 'system',
-          ipAddress: 'internal',
-          actionType: 'error_recovery',
-        },
-      }).catch(console.error);
-    }
-  };
 
   render(): React.ReactNode {
     const { hasError, error, isRecovering } = this.state;
@@ -155,7 +111,6 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
           <Loader 
             size="medium"
             color="primary"
-            ariaLabel="Attempting to recover from error"
           />
           <ErrorMessage variant="body1">
             Attempting to recover...
@@ -171,23 +126,19 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 
       return (
         <ErrorContainer role="alert" aria-live="polite">
-          <Alert 
-            severity="error"
-            sx={{ mb: 2 }}
-            aria-atomic="true"
-          >
+          <Alert severity="error" sx={{ mb: 2 }}>
             {error?.message || 'An unexpected error occurred'}
           </Alert>
           <ErrorMessage variant="body1">
-            We apologize for the inconvenience. Please try again or contact support if the problem persists.
+            Please try again or contact support if the problem persists.
           </ErrorMessage>
           <Button
             variant="contained"
             color="primary"
-            onClick={() => window.location.reload()}
-            aria-label="Reload page"
+            onClick={this.handleRetry}
+            sx={{ mt: 2 }}
           >
-            Reload Page
+            Try Again
           </Button>
         </ErrorContainer>
       );
@@ -195,6 +146,40 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 
     return children;
   }
+
+  private handleRetry = () => {
+    const { retryAttempts = 3 } = this.props;
+    const { retryCount } = this.state;
+
+    if (retryCount < retryAttempts) {
+      this.setState({ isRecovering: true });
+
+      // Track recovery attempt
+      Analytics.track('error_recovery_attempt', {
+        name: 'error_recovery_attempt',
+        category: Analytics.AnalyticsCategory.PERFORMANCE,
+        properties: {
+          retryCount: retryCount + 1,
+          error: this.state.error?.message,
+          component: this.constructor.name
+        },
+        timestamp: Date.now(),
+        userConsent: true,
+        privacyLevel: Analytics.PrivacyLevel.INTERNAL
+      });
+
+      // Attempt recovery
+      this.recoveryTimeout = setTimeout(() => {
+        this.setState(prevState => ({
+          hasError: false,
+          error: null,
+          errorInfo: null,
+          retryCount: prevState.retryCount + 1,
+          isRecovering: false
+        }));
+      }, this.props.recoveryInterval);
+    }
+  };
 }
 
 export default ErrorBoundary;

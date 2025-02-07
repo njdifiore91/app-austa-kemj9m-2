@@ -1,6 +1,7 @@
-import { useEffect, useCallback, useContext } from 'react'; // v18.0.0
+import { useEffect, useCallback, useContext, useState } from 'react'; // v18.0.0
 import { Analytics } from '../lib/utils/analytics';
 import { IAuthContext } from '../lib/types/auth';
+import { useAuthContext } from '../contexts/AuthContext';
 
 // Enhanced types for analytics hook
 export enum PrivacyStatus {
@@ -43,7 +44,7 @@ export const useAnalytics = (): IAnalyticsHook => {
   });
 
   // Get auth context for user data and privacy settings
-  const authContext = useContext<IAuthContext>(AuthContext);
+  const authContext = useAuthContext();
 
   // Initialize analytics with privacy checks
   useEffect(() => {
@@ -52,11 +53,8 @@ export const useAnalytics = (): IAnalyticsHook => {
         await Analytics.initializeAnalytics();
         setIsInitialized(true);
 
-        // Set initial privacy status based on user consent
-        if (authContext.user?.consentHistory?.some(
-          consent => consent.type === 'ANALYTICS' && 
-          new Date(consent.givenAt).getTime() > Date.now() - (90 * 24 * 60 * 60 * 1000) // 90 days
-        )) {
+        // Set initial privacy status based on user role and status
+        if (authContext.user?.role && authContext.user?.status === 'ACTIVE') {
           setPrivacyStatus(PrivacyStatus.CONSENTED);
         } else {
           setPrivacyStatus(PrivacyStatus.PENDING);
@@ -73,7 +71,7 @@ export const useAnalytics = (): IAnalyticsHook => {
     return () => {
       setIsInitialized(false);
     };
-  }, []);
+  }, [authContext.user]);
 
   // Set up performance monitoring
   useEffect(() => {
@@ -124,14 +122,14 @@ export const useAnalytics = (): IAnalyticsHook => {
           ...event.properties,
           userRole: authContext.user?.role,
           userStatus: authContext.user?.status,
-          sessionId: authContext.sessionId
+          sessionId: authContext.tokens?.accessToken
         },
         userConsent: true,
         timestamp: Date.now(),
         auditInfo: {
           eventId: crypto.randomUUID(),
           timestamp: Date.now(),
-          userId: authContext.user?.id || 'anonymous',
+          userId: authContext.user?._id || 'anonymous',
           ipAddress: '[REDACTED]',
           actionType: event.name
         }
@@ -175,18 +173,18 @@ export const useAnalytics = (): IAnalyticsHook => {
         ...metric,
         tags: {
           ...metric.tags,
-          userRole: authContext.user?.role,
-          environment: process.env.NODE_ENV
+          userRole: authContext.user?.role || 'anonymous',
+          environment: process.env.NODE_ENV || 'development'
         },
         context: {
           ...metric.context,
-          sessionId: authContext.sessionId,
+          sessionId: authContext.tokens?.accessToken,
           deviceType: navigator.userAgent
         },
         timestamp: Date.now()
       };
 
-      await Analytics.trackPerformance(enhancedMetric);
+      await Analytics.trackPerformance(enhancedMetric as Analytics.PerformanceMetric);
     } catch (error) {
       console.error('Performance tracking failed:', error);
     }

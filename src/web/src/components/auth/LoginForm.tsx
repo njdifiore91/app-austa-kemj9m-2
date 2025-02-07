@@ -5,11 +5,11 @@
  * @license HIPAA-compliant
  */
 
+'use client';
+
 import React, { useState, useEffect, useCallback } from 'react';
 import styled from '@emotion/styled';
 import { Button, TextField, CircularProgress, Alert, FormControlLabel, Checkbox } from '@mui/material';
-import { useAuditLog } from '@healthcare/audit-logger';
-
 import useAuth from '../../hooks/useAuth';
 import { ILoginCredentials, AuthState, MFAMethod } from '../../lib/types/auth';
 
@@ -62,6 +62,18 @@ interface FormErrors {
   general?: string;
 }
 
+interface LoginResponse {
+  success: boolean;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+  };
+  access_token: string;
+  refresh_token: string;
+  id_token: string;
+}
+
 const LoginForm: React.FC<LoginFormProps> = ({
   onSuccess,
   onError,
@@ -69,8 +81,7 @@ const LoginForm: React.FC<LoginFormProps> = ({
   emergencyAccess = false
 }) => {
   // Hooks
-  const { handleLogin, isLoading, handleBiometricAuth, handleMFAVerification } = useAuth();
-  const auditLog = useAuditLog();
+  const { login: handleLogin, isLoading, verifyMFA: handleMFAVerification } = useAuth();
 
   // State management
   const [formData, setFormData] = useState<ILoginCredentials>({
@@ -144,47 +155,45 @@ const LoginForm: React.FC<LoginFormProps> = ({
 
   const handleSecureSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setErrors({});  // Clear previous errors
     
     try {
       if (!validateForm()) return;
 
-      // Attempt biometric authentication if available
-      if (securityLevel === 'HIGH' && window.PublicKeyCredential) {
-        const biometricResult = await handleBiometricAuth();
-        if (!biometricResult) {
-          throw new Error('Biometric authentication failed');
-        }
-      }
-
-      const response = await handleLogin(formData);
-
-      // Handle MFA if required
-      if (response.requiresMFA) {
-        setAuthState(AuthState.PENDING_MFA);
-        return;
-      }
-
-      auditLog.info('Login successful', {
+      // Call login and wait for response
+      const result = await handleLogin(formData);
+      
+      // Log success
+      console.info('Login successful', {
         userId: formData.email,
         deviceId: formData.deviceId,
         securityLevel,
-        emergencyAccess
+        emergencyAccess,
+        timestamp: new Date().toISOString()
       });
 
-      onSuccess(response);
+      // Pass the result to success handler
+      onSuccess(result);
     } catch (error: any) {
-      auditLog.error('Login failed', {
+      // Log error
+      console.error('Login failed', {
         userId: formData.email,
         error: error?.message || 'Unknown error',
-        securityLevel
+        securityLevel,
+        timestamp: new Date().toISOString()
       });
 
       setErrors(prev => ({
         ...prev,
-        general: error?.message || 'Authentication failed'
+        general: error?.response?.data?.message || error?.message || 'Authentication failed'
       }));
 
-      onError?.(error);
+      if (onError) {
+        onError(error);
+      }
+
+      // Prevent success callback on error
+      return;
     }
   };
 
@@ -192,17 +201,15 @@ const LoginForm: React.FC<LoginFormProps> = ({
     e.preventDefault();
     
     try {
-      const mfaResult = await handleMFAVerification({
+      await handleMFAVerification({
         code: mfaCode,
         method: MFAMethod.AUTHENTICATOR,
         verificationId: formData.email,
         timestamp: Date.now()
       });
 
-      if (mfaResult.success) {
-        setAuthState(AuthState.AUTHENTICATED);
-        onSuccess(mfaResult.tokens);
-      }
+      setAuthState(AuthState.AUTHENTICATED);
+      onSuccess({ success: true });
     } catch (error: any) {
       setErrors(prev => ({
         ...prev,
